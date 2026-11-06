@@ -46,7 +46,7 @@ public class MainFrame extends JFrame {
     private final JLabel usernameLabel;
     private final MetricStrip metricStrip;
     private final JPanel monitorScreen;
-    private final JPanel networkMapPanel;
+    private final NetworkMapPanel networkMapPanel;
     private final HostPanel hostPanel;
     private int activeAlertCount;
     private JButton selectedItem;
@@ -62,8 +62,8 @@ public class MainFrame extends JFrame {
         usernameLabel = new JLabel(" ");
         metricStrip = new MetricStrip();
         monitorScreen = new JPanel(new BorderLayout());
-        networkMapPanel = new JPanel();
         hostPanel = new HostPanel();
+        networkMapPanel = new NetworkMapPanel(facade, hostPanel);
         buildShell();
         refreshMonitor();
         facade.addAlertListener(alert -> SwingUtilities.invokeLater(() -> {
@@ -190,7 +190,6 @@ public class MainFrame extends JFrame {
         body.setName("monitor.body");
         body.setBackground(GROUND);
         networkMapPanel.setName("monitor.network-map");
-        networkMapPanel.setBackground(FOREST);
         networkMapPanel.setMinimumSize(new Dimension(0, 0));
         networkMapPanel.setPreferredSize(new Dimension(0, 0));
         hostPanel.setName("monitor.host-panel");
