@@ -7,6 +7,8 @@ import pk.ooad.ntd.detection.Detector;
 import pk.ooad.ntd.detection.DetectorFactory;
 import pk.ooad.ntd.domain.Admin;
 import pk.ooad.ntd.domain.AnalystTeam;
+import pk.ooad.ntd.domain.AssetStatus;
+import pk.ooad.ntd.domain.AssetType;
 import pk.ooad.ntd.domain.AssignmentResult;
 import pk.ooad.ntd.domain.AttackType;
 import pk.ooad.ntd.domain.BackboneResult;
@@ -112,7 +114,20 @@ public class IncidentResponseFacade {
 
     public ResponsePlan runResponse() {
         BackboneResult backbone = backbonePlanner.plan(network);
-        List<MitigationTask> reachableTasks = responseTasks.stream()
+        List<MitigationTask> tasks = new java.util.ArrayList<>(responseTasks);
+        int daysUnpatched = ConfigManager.getInstance().getInt("task.days.unpatched.default", 0);
+        for (var asset : network.getAssets()) {
+            if (asset.getStatus() != AssetStatus.COMPROMISED && asset.getStatus() != AssetStatus.SUSPICIOUS) {
+                continue;
+            }
+            if (responseTasks.stream().anyMatch(task -> task.getTarget().getId().equals(asset.getId()))) {
+                continue;
+            }
+            int value = Math.toIntExact(Math.round(asset.getRiskScore() * asset.getCriticality()));
+            int cost = taskCost(asset.getType());
+            tasks.add(new MitigationTask("risk-" + asset.getId(), asset, value, cost, "", daysUnpatched));
+        }
+        List<MitigationTask> reachableTasks = tasks.stream()
                 .filter(task -> network.getAsset(task.getTarget().getId()) != null)
                 .filter(task -> !backbone.getUnreachable().contains(task.getTarget()))
                 .map(this::applyValueDecay)
@@ -121,6 +136,16 @@ public class IncidentResponseFacade {
         AssignmentResult assignment = assignmentPlanner.plan(reachableTasks, teams);
         lastResponsePlan = new ResponsePlan(backbone, assignment);
         return lastResponsePlan;
+    }
+
+    private int taskCost(AssetType type) {
+        ConfigManager config = ConfigManager.getInstance();
+        return switch (type) {
+            case SERVER -> config.getInt("task.cost.server", 8);
+            case WORKSTATION -> config.getInt("task.cost.workstation", 6);
+            case ROUTER -> config.getInt("task.cost.router", 12);
+            case IOT_DEVICE -> config.getInt("task.cost.iot", 4);
+        };
     }
 
     private MitigationTask applyValueDecay(MitigationTask task) {

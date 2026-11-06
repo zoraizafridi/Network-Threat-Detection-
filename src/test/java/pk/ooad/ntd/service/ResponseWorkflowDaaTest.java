@@ -3,6 +3,7 @@ package pk.ooad.ntd.service;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import pk.ooad.ntd.domain.AnalystTeam;
+import pk.ooad.ntd.domain.AssetStatus;
 import pk.ooad.ntd.domain.Link;
 import pk.ooad.ntd.domain.MitigationTask;
 import pk.ooad.ntd.domain.Network;
@@ -86,19 +87,87 @@ class ResponseWorkflowDaaTest {
         network.addAsset(reachable);
         network.addAsset(unreachable);
         network.addLink(new Link("soc-reachable", soc, reachable, 1, 10));
+        unreachable.addRisk(80);
+        unreachable.setStatus(AssetStatus.COMPROMISED);
         MitigationTask reachableTask = task("reachable-task", reachable, 25, 1, 0);
-        MitigationTask unreachableTask = task("unreachable-task", unreachable, 1000, 1, 0);
 
-        ResponsePlan response = facade(network, List.of(reachableTask, unreachableTask), teams()).runResponse();
+        ResponsePlan response = facade(network, List.of(reachableTask), teams()).runResponse();
         assertFalse(response.getBackbone().isConnected());
         assertEquals(List.of(unreachable), response.getBackbone().getUnreachable());
         assertEquals(25, response.getAssignment().getTotalValue());
         assertEquals(List.of("reachable-task"), assignedIds(response.getAssignment()));
     }
 
+        @Test
+        void facadeCreatesConfiguredTasksForCompromisedAndSuspiciousHostsOnly() throws IOException {
+        configureTaskCosts();
+        Network network = new Network();
+        NetworkAsset soc = new Router("soc", "SOC", "10.0.0.1", 5);
+        NetworkAsset compromisedServer = new Server("server", "Server", "10.0.0.2", 2);
+        NetworkAsset compromisedWorkstation = new pk.ooad.ntd.domain.Workstation(
+            "workstation", "Workstation", "10.0.0.3", 3, "analyst");
+        NetworkAsset suspiciousIot = new pk.ooad.ntd.domain.IoTDevice(
+            "iot", "IoT", "10.0.0.4", 2, "1.0", false);
+        NetworkAsset normalHost = new Server("normal", "Normal", "10.0.0.5", 4);
+        List.of(soc, compromisedServer, compromisedWorkstation, suspiciousIot, normalHost)
+            .forEach(network::addAsset);
+        compromisedServer.addRisk(40);
+        compromisedServer.setStatus(AssetStatus.COMPROMISED);
+        compromisedWorkstation.addRisk(50);
+        compromisedWorkstation.setStatus(AssetStatus.COMPROMISED);
+        suspiciousIot.addRisk(30);
+        suspiciousIot.setStatus(AssetStatus.SUSPICIOUS);
+        normalHost.addRisk(99);
+        network.addLink(new Link("soc-server", soc, compromisedServer, 1, 10));
+        network.addLink(new Link("soc-workstation", soc, compromisedWorkstation, 1, 10));
+        network.addLink(new Link("soc-iot", soc, suspiciousIot, 1, 10));
+        network.addLink(new Link("soc-normal", soc, normalHost, 1, 10));
+        List<AnalystTeam> teams = List.of(new AnalystTeam("capacity", "Capacity", Set.of(), 20, true));
+
+        ResponsePlan result = facade(network, List.of(), teams).runResponse();
+        List<MitigationTask> assigned = result.getAssignment().getAssignments().values().stream()
+            .flatMap(List::stream).toList();
+        assertEquals(3, assigned.size());
+        assertEquals(377, result.getAssignment().getTotalValue());
+        assertEquals(104, findTask(assigned, "risk-server").getValue());
+        assertEquals(8, findTask(assigned, "risk-server").getCost());
+        assertEquals(3, findTask(assigned, "risk-server").getDaysUnpatched());
+        assertEquals(195, findTask(assigned, "risk-workstation").getValue());
+        assertEquals(6, findTask(assigned, "risk-workstation").getCost());
+        assertEquals(78, findTask(assigned, "risk-iot").getValue());
+        assertEquals(4, findTask(assigned, "risk-iot").getCost());
+        assertFalse(assigned.stream().anyMatch(task -> task.getTarget().equals(normalHost)));
+        }
+
+        @Test
+        void facadeReturnsEmptyAssignmentForNormalOrEmptyNetworks() throws IOException {
+        configure();
+        Network normalNetwork = new Network();
+        NetworkAsset soc = new Router("soc", "SOC", "10.0.0.1", 5);
+        NetworkAsset normal = new Server("normal", "Normal", "10.0.0.2", 2);
+        normalNetwork.addAsset(soc);
+        normalNetwork.addAsset(normal);
+        normalNetwork.addLink(new Link("normal-link", soc, normal, 1, 10));
+        ResponsePlan normalResult = facade(normalNetwork, List.of(), teams()).runResponse();
+        assertTrue(normalResult.getAssignment().getAssignments().isEmpty());
+        assertEquals(0, normalResult.getAssignment().getTotalValue());
+
+        ResponsePlan emptyResult = facade(new Network(), List.of(), teams()).runResponse();
+        assertTrue(emptyResult.getAssignment().getAssignments().isEmpty());
+        assertEquals(0, emptyResult.getAssignment().getTotalValue());
+        }
+
     private void configure() throws IOException {
         configFile = Files.createTempFile("response-flow", ".properties");
         Files.writeString(configFile, "decay.rate=0.1\nsoc.host.id=\ndp.max.states=2000000\n");
+        config.load(configFile.toString());
+    }
+
+    private void configureTaskCosts() throws IOException {
+        configFile = Files.createTempFile("response-task-costs", ".properties");
+        Files.writeString(configFile, "decay.rate=0.1\nsoc.host.id=\ndp.max.states=2000000\n"
+                + "task.cost.server=8\ntask.cost.workstation=6\ntask.cost.router=12\ntask.cost.iot=4\n"
+                + "task.days.unpatched.default=3\n");
         config.load(configFile.toString());
     }
 
@@ -153,6 +222,10 @@ class ResponseWorkflowDaaTest {
 
     private MitigationTask task(String id, NetworkAsset target, int value, int cost, int daysUnpatched) {
         return new MitigationTask(id, target, value, cost, "", daysUnpatched);
+    }
+
+    private MitigationTask findTask(List<MitigationTask> tasks, String id) {
+        return tasks.stream().filter(task -> task.getId().equals(id)).findFirst().orElseThrow();
     }
 
     private List<String> chainLinkIds(int count) {
