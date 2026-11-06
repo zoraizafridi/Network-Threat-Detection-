@@ -1,51 +1,42 @@
-# Class spec
-
-Single source of truth for every class, attribute, operation and relationship.
-Names in code must match this file exactly.
-
-## Resolved decision
-
-ReportGenerator lives in the service package, because it uses Incident (also in service).
-This keeps the dependency rule: response depends only on domain.
-IncidentStatus is in the domain package (it is implemented there).
-
-```
 PROJECT CONTEXT
 Course CT-263 Object-Oriented Analysis and Design (CCA live demo + CCP report).
 System: "Network Threat Detection & Cyber Security Monitoring System".
-Java 17 Swing app. Simulated network, rule-based detection (no ML), alerts, risk scores,
-response planner (Kruskal backbone + DP task assignment), incident report.
+Java 17 backend with a React web front end. No Swing. Simulated network, rule-based detection (no ML),
+alerts, risk scores, response planner (Kruskal backbone + DP task assignment), incident report.
 Same codebase as a DAA project; the OOAD report centres on UML + patterns + demo.
 Brief rule: report diagrams must match the lab demo exactly.
 Report must contain the 8 UML diagrams (use case, activity, class, object, component,
-sequence, communication, deployment) plus a state diagram (the instructor's TOC has one).
-Tool: Modelio 5.4. Model is finished for the class diagram (74 elements, relationships checked).
-A PlantUML copy of the class diagrams also exists (9 package diagrams).
+sequence, communication, deployment).
+Tool: Modelio 5.4. The class model has 69 elements after the move from Swing to web.
 
 STATUS
-Done: class model in Modelio (no attributes/operations entered yet), relationships verified.
-To do: enter attributes/operations; use case, activity, component, state diagrams (before code);
-sequence, communication, object, deployment diagrams (after code works); the report text.
+Done: backend (domain, simulation, detection, service, response, util) with tests, DAA planners,
+class, component, use case and activity diagrams drawn (need the Swing to web edits).
+To do: web package (REST + SSE), web-client (React), then the object, sequence, communication and
+deployment diagrams from a real run, then the reports.
 
 RULES AND DECISIONS
-- Packages: domain, simulation, detection, service, response, ui, util.
-- Dependency rule: domain imports nothing and never Swing; detection/simulation depend only on
-  domain (and util for ConfigManager); service depends on domain+detection (+simulation,
-  response); response depends only on domain; ui depends only on the facade + domain (read only).
-- BackboneResult, AssignmentResult, ResponsePlan live in domain (so ui does not depend on response).
-- RESOLVED: ReportGenerator lives in the service package (it uses Incident, also in service).
+- Packages: domain, simulation, detection, service, response, util, web. No Swing or AWT anywhere.
+- Dependency rule:
+  - domain imports nothing from other project packages.
+  - simulation and detection depend only on domain and util.
+  - response depends only on domain.
+  - service depends on domain, detection, simulation, response, util.
+  - web depends only on service (IncidentResponseFacade), domain (read only) and detection.AlertListener.
+  - The entry class Main may depend on any package and passes port and seed to web.
 - Show a relationship as an arrow OR an attribute, never both.
-- Omit getters/setters. Mark abstract classes and static members.
+- Omit getters/setters except where listed. Mark abstract classes and static members.
 - NetworkEvent is immutable with NO "malicious" field (detectors never see ground truth).
 - Patterns, only these 5: Strategy (Detector + 4 subclasses), Observer (AlertBus/AlertListener),
   Factory (AssetFactory, AlertFactory, DetectorFactory), Singleton (ConfigManager, EventLog),
   Facade (IncidentResponseFacade).
-- Threading: simulator thread -> BlockingQueue -> detection thread -> AlertBus -> UI via
-  SwingUtilities.invokeLater; Kruskal/DP run in SwingWorker.
+- Threading: simulator thread -> BlockingQueue -> detection thread -> AlertBus -> StreamBroadcaster
+  -> SSE to browsers. Web handlers call the facade under one lock.
 - 4 detectors: SignatureDetector (bad IP/port/payload), RateThresholdDetector (failed logins in
   a window), PortScanDetector (distinct ports/hosts in a window), AnomalyDetector (Welford running
   mean/stddev per host, z-score > 3, warm-up, no baseline update on flagged values).
 - Alert cooldown/de-duplication in DetectionEngine. All thresholds come from ConfigManager.
+- The web package and the client contain no detection, risk, Kruskal or DP logic.
 
 ENUMS
 AssetType: SERVER, WORKSTATION, ROUTER, IOT_DEVICE
@@ -54,10 +45,10 @@ LinkStatus: NORMAL, COMPROMISED
 Severity: LOW, HIGH, CRITICAL
 AttackType: PORT_SCAN, BRUTE_FORCE, DOS_FLOOD, DATA_TRANSFER
 EventType: CONNECT, LOGIN_ATTEMPT, REQUEST, DATA_TRANSFER
-IncidentStatus: OPEN, MITIGATED, CLOSED
-LogLevel: INFO, WARN, ERROR
+IncidentStatus: OPEN, MITIGATED, CLOSED   (package domain)
+LogLevel: INFO, WARN, ERROR               (package util)
 
-PACKAGE domain (31 elements incl. 6 enums)
+PACKAGE domain (32 elements incl. 7 enums)
 NetworkAsset {abstract}: -id:String -name:String -ip:String -type:AssetType -criticality:int
   -riskScore:double -status:AssetStatus | +addRisk(delta:double):void +setStatus(s:AssetStatus):void
   +resetRisk():void +{abstract}getDefaultRiskWeight():double +{abstract}getTypicalPorts():List<Integer>
@@ -116,6 +107,7 @@ DetectionEngine: -queue:BlockingQueue<NetworkEvent> -worker:Thread -running:Atom
 
 PACKAGE service (8)
 IncidentResponseFacade <<Facade>>: +login(u:String,p:String):User +start() +stop() +reset() +setAutoMode(on:boolean)
+  +isRunning():boolean +isAutoMode():boolean
   +launchAttack(type:AttackType,src:String,dst:String) +runResponse():ResponsePlan +generateReport():String
   +exportReport(path:String) +addAlertListener(l:AlertListener) +getNetwork():Network +getIncidents():List<Incident>
   (runResponse builds one MitigationTask per COMPROMISED or SUSPICIOUS host:
@@ -126,17 +118,22 @@ IncidentResponseFacade <<Facade>>: +login(u:String,p:String):User +start() +stop
 RiskScorer (implements AlertListener): -cap:double -compromiseThreshold:double -decayPerTick:double |
   +onAlert(a) +decay() +reset() -markAdjacentLinks(asset:NetworkAsset)
 AlertLogger (implements AlertListener): +onAlert(a)   [writes to EventLog]
-Incident: -id:String -sourceIp:String -openedAt:Instant -status:IncidentStatus | +addAlert(a) +getHighestSeverity():Severity +close()
+Incident: -id:String -sourceIp:String -openedAt:Instant -status:IncidentStatus |
+  +addAlert(a) +getHighestSeverity():Severity +close()
+  +getId():String +getSourceIp():String +getStatus():IncidentStatus +getOpenedAt():Instant
+  +getAlerts():List<Alert> (read-only copy)
 IncidentManager (implements AlertListener): -correlationWindowSeconds:int | +onAlert(a) +getIncidents() +reset()
 SOC: +addTeam(t:AnalystTeam) +getAvailableTeams():List<AnalystTeam>
 AuthService: +login(username:String,password:String):User   [throws AuthenticationException]
+  (registers three accounts from config: admin as Admin, analyst as SecurityAnalyst, viewer as Viewer;
+   keys auth.defaultUsername/Password, auth.analystUsername/Password, auth.viewerUsername/Password)
 ReportGenerator: +generate(incidents:List<Incident>,network:Network,plan:ResponsePlan):String +export(report:String,path:String):void
 
 PACKAGE response (3)
 BackbonePlanner: +plan(network:Network):BackboneResult -edgeWeight(l:Link):double
   (edgeWeight returns baseCost only; only links not COMPROMISED are candidates;
    sort by cost asc, then combined endpoint riskScore desc, then link id asc;
-   SOC host id read from ConfigManager key soc.host.id;
+   SOC host id read from ConfigManager key soc.host.id, default the first ROUTER asset when the key is empty;
    unreachable = hosts outside the SOC's component, by name)
 UnionFind: -parent:int[] -rank:int[] | +find(x:int):int (path compression) +union(a:int,b:int):boolean (by rank)
 AssignmentPlanner: +plan(tasks:List<MitigationTask>,teams:List<AnalystTeam>):AssignmentResult -buildTable(...) -backtrack(...)
@@ -144,16 +141,12 @@ AssignmentPlanner: +plan(tasks:List<MitigationTask>,teams:List<AnalystTeam>):Ass
    tasks heavier than every team go to excluded; skills and canHandle are not used by the DP;
    guard: ConfigManager key dp.max.states)
 
-PACKAGE ui (9)  - holds only the facade; no detection/algorithm code
-LoginFrame: -usernameField:JTextField -passwordField:JPasswordField | +onLoginClicked()
-MainFrame: -tabs:JTabbedPane | +applyRolePermissions(u:User)
-NetworkMapPanel (implements AlertListener): +paintComponent(g:Graphics) +onAlert(a) +showBackbone(b:BackboneResult)
-AlertFeedPanel (implements AlertListener): -severityFilter:Severity | +onAlert(a)
-AlertTableModel: -rows:List<Alert> -maxRows:int | +addAlert(a)
-HostPanel: +showHost(a:NetworkAsset)
-AttackControlPanel: +onAttackClicked(type:AttackType) +onStartStop() +onModeToggle() +onReset()
-PlannerPanel: +onRunPlanner() [SwingWorker] +showAssignment(r:AssignmentResult)
-ReportPanel: +onGenerate() +onExport()
+PACKAGE web (4)  - no detection or algorithm code; talks only to IncidentResponseFacade and domain
+WebServer: -app:Javalin -facade:IncidentResponseFacade -lock:ReentrantLock | +start(port:int):void +stop():void +port():int
+ApiRoutes: -facade:IncidentResponseFacade -broadcaster:StreamBroadcaster -lock:ReentrantLock | +register(app:Javalin):void
+StreamBroadcaster (implements AlertListener): -clients:Set<SseClient> -recent:Deque<Alert> | +onAlert(a:Alert):void
+  +addClient(c:SseClient):void +removeClient(c:SseClient):void +getRecentAlerts(limit:int):List<Alert> +broadcastState():void
+Dtos: nested records only (AssetDto, LinkDto, AlertDto, IncidentDto, PlanDto, StateDto), no behaviour
 
 PACKAGE util (4)
 ConfigManager <<Singleton>>: -{static}instance -props:Properties -ConfigManager() | +{static}getInstance() +load(path)
@@ -162,37 +155,29 @@ EventLog <<Singleton>>: -{static}instance -entries:List<String> -logFile:Path -E
   +{static}getInstance() +log(level:LogLevel,component:String,msg:String) +getEntries() +clear()
 InvalidConfigException (extends RuntimeException)
 
-RELATIONSHIPS (verified in the Modelio export)
+RELATIONSHIPS
 Generalization: Server/Workstation/Router/IoTDevice->NetworkAsset; Low/High/CriticalAlert->Alert;
   Admin/SecurityAnalyst/Viewer->User; 4 generators->AttackGenerator; 4 detectors->Detector.
 Composition (diamond at whole): Network->NetworkAsset(0..*,assets), Network->Link(0..*,links),
   AnomalyDetector->RunningStats, SOC->DetectionEngine, IncidentManager->Incident,
-  ResponsePlan->BackboneResult, ResponsePlan->AssignmentResult, MainFrame->6 panels, AlertFeedPanel->AlertTableModel.
+  ResponsePlan->BackboneResult, ResponsePlan->AssignmentResult,
+  WebServer->ApiRoutes, WebServer->StreamBroadcaster.
 Aggregation: TrafficSimulator->AttackGenerator(1..*), TrafficSimulator->HostProfile, DetectionEngine->Detector(1..*),
   AlertBus->AlertListener, SOC->AnalystTeam, Incident->Alert(1..*).
 Association: Link->NetworkAsset(2), TrafficSimulator->AttackRecord(groundTruth), DetectionEngine->AlertBus,
-  RiskScorer->Network, AuthService->User, NetworkMapPanel->BackboneResult(0..1),
+  RiskScorer->Network, AuthService->User,
   IncidentResponseFacade -> Network, TrafficSimulator, DetectionEngine, AlertBus, RiskScorer, IncidentManager,
   SOC, AuthService, BackbonePlanner, AssignmentPlanner, ReportGenerator, User(currentUser);
-  LoginFrame, MainFrame, AttackControlPanel, NetworkMapPanel, PlannerPanel, ReportPanel, AlertFeedPanel -> IncidentResponseFacade.
-Realization of AlertListener: RiskScorer, IncidentManager, AlertLogger, AlertFeedPanel, NetworkMapPanel.
+  WebServer -> IncidentResponseFacade; ApiRoutes -> IncidentResponseFacade; ApiRoutes -> StreamBroadcaster.
+Realization of AlertListener: RiskScorer, IncidentManager, AlertLogger, StreamBroadcaster.
 Dependencies: <<creates>>: AssetFactory->NetworkAsset, AlertFactory->Alert, TopologyLoader->Network,
   DetectorFactory->Detector, TrafficSimulator->NetworkEvent, AttackGenerator->NetworkEvent,
-  BackbonePlanner->BackboneResult, AssignmentPlanner->AssignmentResult, LoginFrame->MainFrame.
+  BackbonePlanner->BackboneResult, AssignmentPlanner->AssignmentResult, ApiRoutes->Dtos.
   <<reads>> TrafficSimulator->Network. <<throws>> AuthService->AuthenticationException,
   ConfigManager->InvalidConfigException. <<use>> everything else (Detector->NetworkEvent/Alert/
   AlertFactory/ConfigManager, DetectionEngine->NetworkEvent, AlertBus->Alert, AlertLogger->EventLog,
   BackbonePlanner->UnionFind/Network, AssignmentPlanner->MitigationTask/AnalystTeam,
-  ReportGenerator->Network/Incident/ResponsePlan, Facade->ResponsePlan/Incident, PlannerPanel->AssignmentResult,
-  HostPanel->NetworkAsset, MainFrame->User, LoginFrame->User/AuthenticationException, AnalystTeam->MitigationTask).
+  ReportGenerator->Network/Incident/ResponsePlan, Facade->ResponsePlan/Incident,
+  ApiRoutes->Alert/Network/ResponsePlan/Incident, AnalystTeam->MitigationTask).
 ConfigManager <<use>> links from TrafficSimulator, DetectionEngine, RiskScorer, IncidentManager exist in the model
   but are hidden on diagrams for readability.
-
-WHAT TO DO NEXT (in order)
-1. Resolve the ReportGenerator/Incident dependency-rule issue.
-2. Enter attributes/operations in Modelio (or use the PlantUML files) package by package.
-3. Pre-code diagrams: component, use case, activity, state (AssetStatus, IncidentStatus, system run state).
-4. Post-code diagrams: sequence, communication, object, deployment.
-5. Report text chapters (TOC: Introduction, Problem Statement, Objectives, System Analysis,
-   Methodology, System Design, Results, Conclusion, Appendices). Chapters 1-3 already drafted.
-```
