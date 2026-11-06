@@ -131,7 +131,7 @@ public class LoginFrame extends JFrame {
     public void onLoginClicked() {
         try {
             User user = facade.login(usernameField.getText(), new String(passwordField.getPassword()));
-            MainFrame mainFrame = new MainFrame();
+            MainFrame mainFrame = new MainFrame(facade);
             mainFrame.applyRolePermissions(user);
             mainFrame.setVisible(true);
             dispose();
