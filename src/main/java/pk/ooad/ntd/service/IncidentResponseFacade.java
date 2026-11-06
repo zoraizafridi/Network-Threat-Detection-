@@ -10,6 +10,7 @@ import pk.ooad.ntd.domain.AnalystTeam;
 import pk.ooad.ntd.domain.AssignmentResult;
 import pk.ooad.ntd.domain.AttackType;
 import pk.ooad.ntd.domain.BackboneResult;
+import pk.ooad.ntd.domain.MitigationTask;
 import pk.ooad.ntd.domain.Network;
 import pk.ooad.ntd.domain.ResponsePlan;
 import pk.ooad.ntd.domain.TopologyLoader;
@@ -35,6 +36,8 @@ public class IncidentResponseFacade {
     private final BackbonePlanner backbonePlanner;
     private final AssignmentPlanner assignmentPlanner;
     private final ReportGenerator reportGenerator;
+    private final List<MitigationTask> responseTasks;
+    private final List<AnalystTeam> responseTeams;
     private User currentUser;
     private ResponsePlan lastResponsePlan;
 
@@ -43,7 +46,13 @@ public class IncidentResponseFacade {
     }
 
     public IncidentResponseFacade(Network network, long seed) {
+        this(network, seed, List.of(), null);
+    }
+
+    IncidentResponseFacade(Network network, long seed, List<MitigationTask> tasks, List<AnalystTeam> teams) {
         this.network = Objects.requireNonNull(network, "network must not be null");
+        responseTasks = tasks == null ? List.of() : List.copyOf(tasks);
+        responseTeams = teams == null ? null : List.copyOf(teams);
         trafficSimulator = new TrafficSimulator(network, seed);
         alertBus = new AlertBus();
         detectionEngine = new DetectionEngine(trafficSimulator.getEventQueue(), alertBus,
@@ -103,9 +112,23 @@ public class IncidentResponseFacade {
 
     public ResponsePlan runResponse() {
         BackboneResult backbone = backbonePlanner.plan(network);
-        AssignmentResult assignment = assignmentPlanner.plan(List.of(), soc.getAvailableTeams());
+        List<MitigationTask> reachableTasks = responseTasks.stream()
+                .filter(task -> network.getAsset(task.getTarget().getId()) != null)
+                .filter(task -> !backbone.getUnreachable().contains(task.getTarget()))
+                .map(this::applyValueDecay)
+                .toList();
+        List<AnalystTeam> teams = responseTeams != null ? responseTeams : soc.getAvailableTeams();
+        AssignmentResult assignment = assignmentPlanner.plan(reachableTasks, teams);
         lastResponsePlan = new ResponsePlan(backbone, assignment);
         return lastResponsePlan;
+    }
+
+    private MitigationTask applyValueDecay(MitigationTask task) {
+        double decayRate = ConfigManager.getInstance().getDouble("decay.rate", 0.0);
+        double adjustedValue = task.getValue() * (1.0 + decayRate * task.getDaysUnpatched());
+        int finalValue = Math.toIntExact(Math.round(adjustedValue));
+        return new MitigationTask(task.getId(), task.getTarget(), finalValue, task.getCost(),
+                task.getRequiredSkill(), task.getDaysUnpatched());
     }
 
     public String generateReport() {
