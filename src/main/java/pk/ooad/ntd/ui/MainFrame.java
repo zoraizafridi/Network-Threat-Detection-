@@ -48,6 +48,8 @@ public class MainFrame extends JFrame {
     private final JPanel monitorScreen;
     private final NetworkMapPanel networkMapPanel;
     private final HostPanel hostPanel;
+    private final AlertFeedPanel monitorAlertFeed;
+    private final AlertFeedPanel alertsScreenFeed;
     private int activeAlertCount;
     private JButton selectedItem;
 
@@ -64,6 +66,8 @@ public class MainFrame extends JFrame {
         monitorScreen = new JPanel(new BorderLayout());
         hostPanel = new HostPanel();
         networkMapPanel = new NetworkMapPanel(facade, hostPanel);
+        monitorAlertFeed = new AlertFeedPanel(facade);
+        alertsScreenFeed = new AlertFeedPanel(facade);
         buildShell();
         refreshMonitor();
         facade.addAlertListener(alert -> SwingUtilities.invokeLater(() -> {
@@ -167,6 +171,14 @@ public class MainFrame extends JFrame {
                 screenCards.add(monitorScreen, name);
                 continue;
             }
+            if (name.equals("Alerts")) {
+                JPanel alertsScreen = new JPanel(new BorderLayout());
+                alertsScreen.setBackground(GROUND);
+                alertsScreen.setBorder(BorderFactory.createEmptyBorder(24, 24, 24, 24));
+                alertsScreen.add(alertsScreenFeed, BorderLayout.CENTER);
+                screenCards.add(alertsScreen, name);
+                continue;
+            }
             JPanel placeholder = new JPanel(new BorderLayout());
             placeholder.setBackground(GROUND);
             placeholder.setBorder(BorderFactory.createEmptyBorder(24, 32, 24, 32));
@@ -211,7 +223,14 @@ public class MainFrame extends JFrame {
         hostConstraints.weighty = 1;
         hostConstraints.fill = GridBagConstraints.BOTH;
         hostConstraints.insets = new java.awt.Insets(24, 0, 0, 0);
-        body.add(hostPanel, hostConstraints);
+        JPanel rightColumn = new JPanel(new BorderLayout(0, 16));
+        rightColumn.setName("monitor.right-column");
+        rightColumn.setOpaque(false);
+        rightColumn.setMinimumSize(new Dimension(0, 0));
+        rightColumn.setPreferredSize(new Dimension(0, 0));
+        rightColumn.add(monitorAlertFeed, BorderLayout.CENTER);
+        rightColumn.add(hostPanel, BorderLayout.SOUTH);
+        body.add(rightColumn, hostConstraints);
         monitorScreen.add(body, BorderLayout.CENTER);
     }
 
@@ -250,6 +269,14 @@ public class MainFrame extends JFrame {
 
     HostPanel hostPanel() {
         return hostPanel;
+    }
+
+    AlertFeedPanel monitorAlertFeed() {
+        return monitorAlertFeed;
+    }
+
+    AlertFeedPanel alertsScreenFeed() {
+        return alertsScreenFeed;
     }
 
     private static final class MetricStrip extends JPanel {

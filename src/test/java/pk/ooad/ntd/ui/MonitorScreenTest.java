@@ -42,11 +42,13 @@ class MonitorScreenTest {
                 Container strip = (Container) findComponent(frame, "monitor.metric-strip");
                 Container body = (Container) findComponent(frame, "monitor.body");
                 Component map = findComponent(frame, "monitor.network-map");
+                Component rightColumn = findComponent(frame, "monitor.right-column");
                 Component host = findComponent(frame, "monitor.host-panel");
                 assertNotNull(monitor);
                 assertNotNull(strip);
                 assertNotNull(body);
                 assertNotNull(map);
+                assertNotNull(rightColumn);
                 assertNotNull(host);
 
                 int minWidth = Integer.MAX_VALUE;
@@ -70,12 +72,19 @@ class MonitorScreenTest {
                 assertEquals(strip.getWidth(), body.getWidth());
                 Point stripPoint = SwingUtilities.convertPoint(strip, 0, 0, monitor);
                 Point mapPoint = SwingUtilities.convertPoint(map, 0, 0, monitor);
-                assertEquals(24, stripPoint.x);
-                assertEquals(24, mapPoint.x);
-                assertEquals(map.getY(), host.getY());
-                assertEquals(map.getHeight(), host.getHeight());
-                assertEquals(32, host.getX() - map.getX() - map.getWidth());
-                double mapShare = (double) map.getWidth() / (map.getWidth() + host.getWidth());
+                assertEquals(24, stripPoint.x, "strip position=" + stripPoint + ", strip bounds="
+                    + strip.getBounds() + ", monitor bounds=" + monitor.getBounds());
+                assertTrue(mapPoint.x == 24, "map position=" + mapPoint + ", map bounds=" + map.getBounds()
+                    + ", parent=" + map.getParent().getBounds() + ", body=" + body.getBounds()
+                    + ", monitor=" + monitor.getBounds());
+                Point hostPoint = SwingUtilities.convertPoint(host, 0, 0, body);
+                Point rightPoint = SwingUtilities.convertPoint(rightColumn, 0, 0, body);
+                Point feedPoint = SwingUtilities.convertPoint(frame.monitorAlertFeed(), 0, 0, body);
+                assertEquals(24, map.getY());
+                assertEquals(32, rightPoint.x - map.getX() - map.getWidth());
+                assertTrue(hostPoint.y > feedPoint.y);
+                assertTrue(feedPoint.y + frame.monitorAlertFeed().getHeight() <= hostPoint.y);
+                double mapShare = (double) map.getWidth() / (map.getWidth() + rightColumn.getWidth());
                 assertTrue(mapShare > 0.60 && mapShare < 0.70,
                     "Map should use about two thirds of panel width, actual share " + mapShare
                         + " (map " + map.getWidth() + ", host " + host.getWidth() + ")");
@@ -134,6 +143,18 @@ class MonitorScreenTest {
             assertEquals("0", findLabel(frame, "monitor.metric.1.value").getText());
         } finally {
             facade.stop();
+        }
+    }
+
+    @Test
+    void mainFrameUsesSeparateMonitorAndAlertsFeedPanels() {
+        MainFrame frame = new MainFrame(new IncidentResponseFacade(new Network(), 414L));
+        try {
+            assertNotNull(frame.monitorAlertFeed());
+            assertNotNull(frame.alertsScreenFeed());
+            assertTrue(frame.monitorAlertFeed() != frame.alertsScreenFeed());
+        } finally {
+            frame.dispose();
         }
     }
 
