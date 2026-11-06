@@ -118,6 +118,11 @@ PACKAGE service (8)
 IncidentResponseFacade <<Facade>>: +login(u:String,p:String):User +start() +stop() +reset() +setAutoMode(on:boolean)
   +launchAttack(type:AttackType,src:String,dst:String) +runResponse():ResponsePlan +generateReport():String
   +exportReport(path:String) +addAlertListener(l:AlertListener) +getNetwork():Network +getIncidents():List<Incident>
+  (runResponse builds one MitigationTask per COMPROMISED or SUSPICIOUS host:
+   value = round(riskScore * criticality), cost = effort hours by asset type
+   (config keys task.cost.server, task.cost.workstation, task.cost.router, task.cost.iot),
+   daysUnpatched from config key task.days.unpatched.default;
+   only tasks on hosts in the SOC's component go to the DP)
 RiskScorer (implements AlertListener): -cap:double -compromiseThreshold:double -decayPerTick:double |
   +onAlert(a) +decay() +reset() -markAdjacentLinks(asset:NetworkAsset)
 AlertLogger (implements AlertListener): +onAlert(a)   [writes to EventLog]
