@@ -4,6 +4,7 @@ import pk.ooad.ntd.domain.Alert;
 import pk.ooad.ntd.domain.AttackType;
 import pk.ooad.ntd.domain.NetworkEvent;
 import pk.ooad.ntd.domain.Severity;
+import pk.ooad.ntd.util.ConfigManager;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -32,7 +33,10 @@ public class PortScanDetector extends Detector {
     }
 
     public PortScanDetector() {
-        this("PortScanDetector", 60, 10, 15);
+        this("PortScanDetector",
+            ConfigManager.getInstance().getInt("detection.portScan.windowSeconds", 60),
+            ConfigManager.getInstance().getInt("detection.portScan.maxDistinctPorts", 10),
+            ConfigManager.getInstance().getInt("detection.portScan.maxDistinctHosts", 15));
     }
 
     @Override

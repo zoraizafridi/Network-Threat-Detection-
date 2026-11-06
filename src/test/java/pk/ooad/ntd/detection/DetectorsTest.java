@@ -6,9 +6,14 @@ import pk.ooad.ntd.domain.Alert;
 import pk.ooad.ntd.domain.AttackType;
 import pk.ooad.ntd.domain.EventType;
 import pk.ooad.ntd.domain.NetworkEvent;
+import pk.ooad.ntd.util.ConfigManager;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -144,5 +149,66 @@ class DetectorsTest {
         detector.reset();
         assertEquals(0, detector.getStats().size(), "reset() must clear all host statistics");
     }
+
+        @Test
+        @DisplayName("No-argument detection components use configured threshold values")
+        void noArgumentDetectorsReadThresholdsFromConfiguration() throws IOException {
+        Path configFile = Files.createTempFile("ntd-detection-config", ".properties");
+        try {
+            Files.writeString(configFile, """
+                detection.cooldownSeconds=17
+                detection.rate.windowSeconds=9
+                detection.rate.maxFailures=1
+                detection.portScan.windowSeconds=8
+                detection.portScan.maxDistinctPorts=1
+                detection.portScan.maxDistinctHosts=1
+                detection.anomaly.zThreshold=0.1
+                detection.anomaly.warmupCount=2
+                detection.signature.badIps=198.51.100.77
+                detection.signature.badPorts=65000
+                detection.signature.payloadPatterns=CONFIG_MARKER
+                """);
+            ConfigManager.getInstance().load(configFile.toString());
+
+            RateThresholdDetector rateDetector = new RateThresholdDetector();
+            assertEquals(9, rateDetector.getWindowSeconds());
+            assertEquals(1, rateDetector.getMaxFailures());
+            rateDetector.analyze(new NetworkEvent(1, baseTime, "10.0.0.77", "10.0.0.2", 22,
+                20, EventType.LOGIN_ATTEMPT, false, "FAIL"));
+            assertTrue(rateDetector.analyze(new NetworkEvent(2, baseTime.plusSeconds(1), "10.0.0.77",
+                "10.0.0.2", 22, 20, EventType.LOGIN_ATTEMPT, false, "FAIL")).isPresent());
+
+            PortScanDetector portDetector = new PortScanDetector();
+            assertEquals(8, portDetector.getWindowSeconds());
+            assertEquals(1, portDetector.getMaxDistinctPorts());
+            assertEquals(1, portDetector.getMaxDistinctHosts());
+            portDetector.analyze(new NetworkEvent(3, baseTime, "10.0.0.78", "10.0.0.2", 21,
+                20, EventType.CONNECT, false, "SYN"));
+            assertTrue(portDetector.analyze(new NetworkEvent(4, baseTime.plusSeconds(1), "10.0.0.78",
+                "10.0.0.3", 22, 20, EventType.CONNECT, false, "SYN")).isPresent());
+
+            AnomalyDetector anomalyDetector = new AnomalyDetector();
+            assertEquals(0.1, anomalyDetector.getZThreshold());
+            assertEquals(2, anomalyDetector.getWarmupCount());
+            anomalyDetector.analyze(new NetworkEvent(5, baseTime, "10.0.0.79", "10.0.0.2", 80,
+                100, EventType.DATA_TRANSFER, true, "OK"));
+            anomalyDetector.analyze(new NetworkEvent(6, baseTime.plusSeconds(1), "10.0.0.79", "10.0.0.2",
+                80, 101, EventType.DATA_TRANSFER, true, "OK"));
+            assertTrue(anomalyDetector.analyze(new NetworkEvent(7, baseTime.plusSeconds(2), "10.0.0.79",
+                "10.0.0.2", 80, 10_000, EventType.DATA_TRANSFER, true, "OK")).isPresent());
+
+            SignatureDetector signatureDetector = new SignatureDetector();
+            assertTrue(signatureDetector.getBadIps().contains("198.51.100.77"));
+            assertTrue(signatureDetector.getBadPorts().contains(65000));
+            assertTrue(signatureDetector.analyze(new NetworkEvent(8, baseTime, "10.0.0.80", "10.0.0.2",
+                80, 100, EventType.REQUEST, true, "CONFIG_MARKER")).isPresent());
+
+            DetectionEngine engine = new DetectionEngine(new LinkedBlockingQueue<>(), new AlertBus());
+            assertEquals(17, engine.getCooldownSeconds());
+        } finally {
+            ConfigManager.getInstance().load("src/main/resources/config.properties");
+            Files.deleteIfExists(configFile);
+        }
+        }
 }
 

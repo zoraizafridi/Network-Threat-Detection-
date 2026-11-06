@@ -2,6 +2,7 @@ package pk.ooad.ntd.detection;
 
 import pk.ooad.ntd.domain.Alert;
 import pk.ooad.ntd.domain.NetworkEvent;
+import pk.ooad.ntd.util.ConfigManager;
 
 import java.time.Instant;
 import java.util.Collections;
@@ -34,7 +35,7 @@ public class DetectionEngine {
     }
 
     public DetectionEngine(BlockingQueue<NetworkEvent> queue, AlertBus alertBus) {
-        this(queue, alertBus, 5);
+        this(queue, alertBus, ConfigManager.getInstance().getInt("detection.cooldownSeconds", 5));
     }
 
     public synchronized void start() {

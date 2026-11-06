@@ -5,6 +5,7 @@ import pk.ooad.ntd.domain.AttackType;
 import pk.ooad.ntd.domain.EventType;
 import pk.ooad.ntd.domain.NetworkEvent;
 import pk.ooad.ntd.domain.Severity;
+import pk.ooad.ntd.util.ConfigManager;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -27,7 +28,9 @@ public class RateThresholdDetector extends Detector {
     }
 
     public RateThresholdDetector() {
-        this("RateThresholdDetector", 60, 5);
+        this("RateThresholdDetector",
+            ConfigManager.getInstance().getInt("detection.rate.windowSeconds", 60),
+            ConfigManager.getInstance().getInt("detection.rate.maxFailures", 5));
     }
 
     @Override

@@ -4,6 +4,7 @@ import pk.ooad.ntd.domain.Alert;
 import pk.ooad.ntd.domain.AttackType;
 import pk.ooad.ntd.domain.NetworkEvent;
 import pk.ooad.ntd.domain.Severity;
+import pk.ooad.ntd.util.ConfigManager;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -27,12 +28,43 @@ public class SignatureDetector extends Detector {
 
     public SignatureDetector() {
         this("SignatureDetector",
-            Set.of("198.51.100.4", "203.0.113.5", "192.0.2.1"),
-            Set.of(31337, 4444, 6667),
-            List.of(
-                Pattern.compile(".*(DOS_FLOOD|EXPLOIT|MALWARE|ATTACK).*", Pattern.CASE_INSENSITIVE)
-            )
+            configuredIps(),
+            configuredPorts(),
+            configuredPayloadPatterns()
         );
+    }
+
+    private static Set<String> configuredIps() {
+        String configured = ConfigManager.getInstance().getString("detection.signature.badIps",
+                "198.51.100.4,203.0.113.5,192.0.2.1");
+        Set<String> result = new HashSet<>();
+        for (String ip : configured.split(",")) {
+            if (!ip.isBlank()) result.add(ip.trim());
+        }
+        return result;
+    }
+
+    private static Set<Integer> configuredPorts() {
+        String configured = ConfigManager.getInstance().getString("detection.signature.badPorts", "31337,4444,6667");
+        Set<Integer> result = new HashSet<>();
+        try {
+            for (String port : configured.split(",")) {
+                if (!port.isBlank()) result.add(Integer.parseInt(port.trim()));
+            }
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid detection.signature.badPorts configuration", e);
+        }
+        return result;
+    }
+
+    private static List<Pattern> configuredPayloadPatterns() {
+        String configured = ConfigManager.getInstance().getString("detection.signature.payloadPatterns",
+                ".*(DOS_FLOOD|EXPLOIT|MALWARE|ATTACK).*");
+        List<Pattern> result = new ArrayList<>();
+        for (String expression : configured.split(",")) {
+            if (!expression.isBlank()) result.add(Pattern.compile(expression.trim(), Pattern.CASE_INSENSITIVE));
+        }
+        return result;
     }
 
     @Override

@@ -5,6 +5,7 @@ import pk.ooad.ntd.domain.AttackType;
 import pk.ooad.ntd.domain.EventType;
 import pk.ooad.ntd.domain.NetworkEvent;
 import pk.ooad.ntd.domain.Severity;
+import pk.ooad.ntd.util.ConfigManager;
 
 import java.util.Collections;
 import java.util.Map;
@@ -24,7 +25,9 @@ public class AnomalyDetector extends Detector {
     }
 
     public AnomalyDetector() {
-        this("AnomalyDetector", 3.0, 5);
+        this("AnomalyDetector",
+            ConfigManager.getInstance().getDouble("detection.anomaly.zThreshold", 3.0),
+            ConfigManager.getInstance().getInt("detection.anomaly.warmupCount", 5));
     }
 
     @Override
