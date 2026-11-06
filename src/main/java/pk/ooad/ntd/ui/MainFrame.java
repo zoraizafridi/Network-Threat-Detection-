@@ -66,7 +66,9 @@ public class MainFrame extends JFrame {
         monitorScreen = new JPanel(new BorderLayout());
         hostPanel = new HostPanel();
         networkMapPanel = new NetworkMapPanel(facade, hostPanel);
-        monitorAlertFeed = new AlertFeedPanel(facade);
+        monitorAlertFeed = new AlertFeedPanel(facade, java.time.Clock.systemDefaultZone(),
+            pk.ooad.ntd.util.ConfigManager.getInstance().getInt("ui.alert.maxRows", 200),
+            pk.ooad.ntd.util.ConfigManager.getInstance().getInt("ui.alert.maxPerSecond", 10), false);
         alertsScreenFeed = new AlertFeedPanel(facade);
         buildShell();
         refreshMonitor();
@@ -223,13 +225,27 @@ public class MainFrame extends JFrame {
         hostConstraints.weighty = 1;
         hostConstraints.fill = GridBagConstraints.BOTH;
         hostConstraints.insets = new java.awt.Insets(24, 0, 0, 0);
-        JPanel rightColumn = new JPanel(new BorderLayout(0, 16));
+        JPanel rightColumn = new JPanel(new GridBagLayout());
         rightColumn.setName("monitor.right-column");
         rightColumn.setOpaque(false);
         rightColumn.setMinimumSize(new Dimension(0, 0));
         rightColumn.setPreferredSize(new Dimension(0, 0));
-        rightColumn.add(monitorAlertFeed, BorderLayout.CENTER);
-        rightColumn.add(hostPanel, BorderLayout.SOUTH);
+        GridBagConstraints feedConstraints = new GridBagConstraints();
+        feedConstraints.gridx = 0;
+        feedConstraints.gridy = 0;
+        feedConstraints.weightx = 1;
+        feedConstraints.weighty = 0.6;
+        feedConstraints.fill = GridBagConstraints.BOTH;
+        feedConstraints.insets = new java.awt.Insets(0, 0, 16, 0);
+        rightColumn.add(monitorAlertFeed, feedConstraints);
+        GridBagConstraints hostPanelConstraints = new GridBagConstraints();
+        hostPanelConstraints.gridx = 0;
+        hostPanelConstraints.gridy = 1;
+        hostPanelConstraints.weightx = 1;
+        hostPanelConstraints.weighty = 0.4;
+        hostPanelConstraints.fill = GridBagConstraints.BOTH;
+        hostPanelConstraints.insets = new java.awt.Insets(16, 0, 0, 0);
+        rightColumn.add(hostPanel, hostPanelConstraints);
         body.add(rightColumn, hostConstraints);
         monitorScreen.add(body, BorderLayout.CENTER);
     }

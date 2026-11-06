@@ -40,22 +40,29 @@ public class AlertFeedPanel extends JPanel implements AlertListener {
     private final JPanel cardPanel;
     private final CardLayout cardLayout;
     private final JButton[] filterButtons = new JButton[4];
+    private final boolean showSeverityFilter;
     private Severity severityFilter;
 
     public AlertFeedPanel(IncidentResponseFacade facade) {
         this(facade, Clock.systemDefaultZone(),
                 ConfigManager.getInstance().getInt("ui.alert.maxRows", 200),
-                ConfigManager.getInstance().getInt("ui.alert.maxPerSecond", 10));
+                ConfigManager.getInstance().getInt("ui.alert.maxPerSecond", 10), true);
     }
 
     AlertFeedPanel(IncidentResponseFacade facade, Clock clock) {
         this(facade, clock, ConfigManager.getInstance().getInt("ui.alert.maxRows", 200),
-                ConfigManager.getInstance().getInt("ui.alert.maxPerSecond", 10));
+                ConfigManager.getInstance().getInt("ui.alert.maxPerSecond", 10), true);
     }
 
     AlertFeedPanel(IncidentResponseFacade facade, Clock clock, int maxRows, int maxPerSecond) {
+        this(facade, clock, maxRows, maxPerSecond, true);
+    }
+
+    AlertFeedPanel(IncidentResponseFacade facade, Clock clock, int maxRows, int maxPerSecond,
+                   boolean showSeverityFilter) {
         super(new BorderLayout(0, 8));
         Objects.requireNonNull(facade, "facade must not be null");
+        this.showSeverityFilter = showSeverityFilter;
         tableModel = new AlertTableModel(maxRows, maxPerSecond, Objects.requireNonNull(clock, "clock must not be null"));
         table = new JTable(tableModel);
         cardLayout = new CardLayout();
@@ -67,7 +74,7 @@ public class AlertFeedPanel extends JPanel implements AlertListener {
     private void buildPanel() {
         setOpaque(false);
         setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
-        add(buildFilterRow(), BorderLayout.NORTH);
+        if (showSeverityFilter) add(buildFilterRow(), BorderLayout.NORTH);
         configureTable();
 
         JLabel emptyMessage = new JLabel("No alerts. Start the traffic.", JLabel.CENTER);

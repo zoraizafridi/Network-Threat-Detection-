@@ -15,8 +15,10 @@ import pk.ooad.ntd.domain.BackboneResult;
 import pk.ooad.ntd.domain.MitigationTask;
 import pk.ooad.ntd.domain.Network;
 import pk.ooad.ntd.domain.ResponsePlan;
+import pk.ooad.ntd.domain.SecurityAnalyst;
 import pk.ooad.ntd.domain.TopologyLoader;
 import pk.ooad.ntd.domain.User;
+import pk.ooad.ntd.domain.Viewer;
 import pk.ooad.ntd.response.AssignmentPlanner;
 import pk.ooad.ntd.response.BackbonePlanner;
 import pk.ooad.ntd.simulation.TrafficSimulator;
@@ -65,9 +67,16 @@ public class IncidentResponseFacade {
         soc = new SOC(detectionEngine);
         soc.addTeam(new AnalystTeam("default-team", "Default SOC Team", Set.of(),
                 ConfigManager.getInstance().getInt("soc.defaultTeamCapacity", 100), true));
-        authService = new AuthService(List.of(new Admin(
-                ConfigManager.getInstance().getString("auth.defaultUsername", "admin"),
-                ConfigManager.getInstance().getString("auth.defaultPassword", "admin"))));
+        ConfigManager config = ConfigManager.getInstance();
+        authService = new AuthService(List.of(
+            new Admin(config.getString("auth.admin.user",
+                    config.getString("auth.defaultUsername", "admin")),
+                config.getString("auth.admin.password",
+                    config.getString("auth.defaultPassword", "admin"))),
+            new SecurityAnalyst(config.getString("auth.analyst.user", "analyst"),
+                config.getString("auth.analyst.password", "analyst")),
+            new Viewer(config.getString("auth.viewer.user", "viewer"),
+                config.getString("auth.viewer.password", "viewer"))));
         backbonePlanner = new BackbonePlanner();
         assignmentPlanner = new AssignmentPlanner();
         reportGenerator = new ReportGenerator();
