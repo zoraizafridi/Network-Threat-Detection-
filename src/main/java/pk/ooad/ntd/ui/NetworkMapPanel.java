@@ -19,7 +19,10 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Ellipse2D;
@@ -28,6 +31,7 @@ import java.awt.geom.RoundRectangle2D;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.ConcurrentModificationException;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,13 +45,17 @@ public class NetworkMapPanel extends JPanel implements AlertListener {
     private static final Color SUSPICIOUS = new Color(0xE0A63B);
     private static final Color COMPROMISED = new Color(0xE5604D);
     private static final int PANEL_MARGIN = 32;
-    private static final int NODE_LABEL_OFFSET = 28;
-    private static final int HIT_RADIUS = 18;
+    private static final int LABEL_GAP = 4;
+    private static final int LABEL_PADDING = 4;
+    private static final int SLOT_GAP = 8;
+    private static final int GLYPH_HALF_SIZE = 15;
 
     private final Network network;
     private final HostPanel hostPanel;
     private List<NetworkAsset> layoutAssets = List.of();
     private Map<String, Point> nodePositions = Map.of();
+    private Map<String, Rectangle> nodeBounds = Map.of();
+    private Map<String, Rectangle> labelBounds = Map.of();
     private int layoutWidth = -1;
     private int layoutHeight = -1;
     private NetworkAsset selectedAsset;
@@ -61,6 +69,12 @@ public class NetworkMapPanel extends JPanel implements AlertListener {
             @Override
             public void mouseClicked(MouseEvent event) {
                 selectAt(event.getX(), event.getY());
+            }
+        });
+        addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent event) {
+                recomputeOnResize();
             }
         });
         facade.addAlertListener(this);
@@ -77,13 +91,16 @@ public class NetworkMapPanel extends JPanel implements AlertListener {
         } catch (ConcurrentModificationException exception) {
             return;
         }
+        if (layoutWidth != getWidth() || layoutHeight != getHeight()) {
+            recomputeLayout(getWidth(), getHeight(), assets);
+        }
 
-        ensureLayout(getWidth(), getHeight(), assets);
         Graphics2D g = (Graphics2D) graphics.create();
         try {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             for (Link link : links) drawLink(g, link);
-            for (NetworkAsset asset : assets) drawNode(g, asset);
+            for (NetworkAsset asset : assets) drawNodeGlyph(g, asset);
+            for (NetworkAsset asset : assets) drawHostName(g, asset);
         } finally {
             g.dispose();
         }
@@ -97,32 +114,147 @@ public class NetworkMapPanel extends JPanel implements AlertListener {
         });
     }
 
-    private void ensureLayout(int width, int height, List<NetworkAsset> assets) {
-        if (width == layoutWidth && height == layoutHeight) return;
-        recomputeLayout(width, height, assets);
+    private void recomputeOnResize() {
+        List<NetworkAsset> assets;
+        try {
+            assets = new ArrayList<>(network.getAssets());
+        } catch (ConcurrentModificationException exception) {
+            return;
+        }
+        recomputeLayout(getWidth(), getHeight(), assets);
+        repaint();
     }
 
     private void recomputeLayout(int width, int height, List<NetworkAsset> currentAssets) {
         List<NetworkAsset> assets = new ArrayList<>(currentAssets);
-        assets.sort(Comparator.comparing(NetworkAsset::getId));
+        assets.sort(Comparator.comparing(NetworkAsset::getName).thenComparing(NetworkAsset::getId));
+        EnumMap<AssetType, List<NetworkAsset>> groups = new EnumMap<>(AssetType.class);
+        for (AssetType type : AssetType.values()) groups.put(type, new ArrayList<>());
+        for (NetworkAsset asset : assets) groups.get(asset.getType()).add(asset);
+
+        FontMetrics metrics = getFontMetrics(new Font("IBM Plex Mono", Font.PLAIN, 12));
+        int labelHeight = metrics.getHeight() + 2;
+        int rowStep = GLYPH_HALF_SIZE * 2 + LABEL_GAP + labelHeight + SLOT_GAP;
+        Map<String, Integer> labelWidths = new HashMap<>();
+        for (NetworkAsset asset : assets) labelWidths.put(asset.getId(), metrics.stringWidth(asset.getName()));
+
+        int innerWidth = Math.max(1, width - 2 * PANEL_MARGIN);
+        List<NetworkAsset> iot = groups.get(AssetType.IOT_DEVICE);
+        List<NetworkAsset> workstations = groups.get(AssetType.WORKSTATION);
+        List<NetworkAsset> routers = groups.get(AssetType.ROUTER);
+        List<NetworkAsset> servers = groups.get(AssetType.SERVER);
+
+        int iotSlotWidth = groupSlotWidth(iot, labelWidths);
+        int serverSlotWidth = groupSlotWidth(servers, labelWidths);
+        int iotColumns = Math.max(1, innerWidth / iotSlotWidth);
+        int serverColumns = Math.max(1, innerWidth / serverSlotWidth);
+        int iotRows = rowCount(iot.size(), iotColumns);
+        int serverRows = rowCount(servers.size(), serverColumns);
+        int topBandHeight = iotRows * rowStep;
+        int bottomBandHeight = serverRows * rowStep;
+        int middleTop = PANEL_MARGIN + topBandHeight;
+        int middleBottom = height - PANEL_MARGIN - bottomBandHeight;
+        int middleHeight = Math.max(rowStep, middleBottom - middleTop);
+
+        int workstationSlotWidth = groupSlotWidth(workstations, labelWidths);
+        int workstationRowsFit = Math.max(1, (middleHeight - GLYPH_HALF_SIZE * 2 - LABEL_GAP - labelHeight)
+            / rowStep + 1);
+        int requiredWorkstationColumns = Math.max(1, rowCount(workstations.size(), workstationRowsFit));
+        int workstationColumnsFit = Math.max(1, (innerWidth / 2) / workstationSlotWidth);
+        int workstationColumns = Math.min(requiredWorkstationColumns, workstationColumnsFit);
+        int workstationRows = rowCount(workstations.size(), workstationColumns);
+        int workstationZoneWidth = Math.min(innerWidth / 2, workstationColumns * workstationSlotWidth);
+        int routerStartX = PANEL_MARGIN + workstationZoneWidth + SLOT_GAP;
+        int routerZoneWidth = Math.max(1, width - PANEL_MARGIN - routerStartX);
+        int routerSlotWidth = groupSlotWidth(routers, labelWidths);
+        int routerColumns = Math.max(1, routerZoneWidth / routerSlotWidth);
+
         Map<String, Point> positions = new HashMap<>();
-        int count = assets.size();
-        if (count > 0) {
-            double centerX = width / 2.0;
-            double centerY = height / 2.0 - 8.0;
-            double radiusX = Math.max(0.0, width / 2.0 - PANEL_MARGIN - 16.0);
-            double radiusY = Math.max(0.0, height / 2.0 - PANEL_MARGIN - NODE_LABEL_OFFSET);
-            for (int index = 0; index < count; index++) {
-                double angle = -Math.PI / 2.0 + (Math.PI * 2.0 * index) / count;
-                int x = (int) Math.round(centerX + radiusX * Math.cos(angle));
-                int y = (int) Math.round(centerY + radiusY * Math.sin(angle));
-                positions.put(assets.get(index).getId(), new Point(x, y));
-            }
-        }
+        Map<String, Rectangle> glyphs = new HashMap<>();
+        Map<String, Rectangle> labels = new HashMap<>();
+        placeRows(iot, iotColumns, PANEL_MARGIN, PANEL_MARGIN + GLYPH_HALF_SIZE, innerWidth,
+            iotSlotWidth, labelWidths, metrics, width, rowStep, false, positions, glyphs, labels);
+        placeColumns(workstations, workstationColumns, workstationRows, PANEL_MARGIN,
+            middleTop + GLYPH_HALF_SIZE, workstationZoneWidth, workstationSlotWidth,
+            labelWidths, metrics, width, rowStep, positions, glyphs, labels);
+        placeRows(routers, routerColumns, routerStartX, middleTop + GLYPH_HALF_SIZE, routerZoneWidth,
+            routerSlotWidth, labelWidths, metrics, width, rowStep, false, positions, glyphs, labels);
+        int bottomCenterY = height - PANEL_MARGIN - GLYPH_HALF_SIZE - LABEL_GAP - labelHeight;
+        placeRows(servers, serverColumns, PANEL_MARGIN, bottomCenterY, innerWidth, serverSlotWidth,
+            labelWidths, metrics, width, rowStep, true,
+            positions, glyphs, labels);
+
         layoutAssets = List.copyOf(assets);
         nodePositions = Map.copyOf(positions);
+        nodeBounds = Map.copyOf(glyphs);
+        labelBounds = Map.copyOf(labels);
         layoutWidth = width;
         layoutHeight = height;
+    }
+
+    private int groupSlotWidth(List<NetworkAsset> assets, Map<String, Integer> labelWidths) {
+        int widest = 0;
+        for (NetworkAsset asset : assets) widest = Math.max(widest, labelWidths.get(asset.getId()));
+        return Math.max(48, widest + LABEL_PADDING * 2 + SLOT_GAP);
+    }
+
+    private int rowCount(int itemCount, int columns) {
+        return itemCount == 0 ? 0 : (itemCount + columns - 1) / columns;
+    }
+
+    private void placeRows(List<NetworkAsset> assets, int columns, int zoneX, int firstCenterY, int zoneWidth,
+                           int slotWidth, Map<String, Integer> widths, FontMetrics metrics, int panelWidth,
+                           int rowStep, boolean fromBottom,
+                           Map<String, Point> positions, Map<String, Rectangle> glyphs,
+                           Map<String, Rectangle> labels) {
+        if (assets.isEmpty()) return;
+        int actualColumns = Math.max(1, Math.min(columns, Math.max(1, zoneWidth / slotWidth)));
+        int rows = rowCount(assets.size(), actualColumns);
+        int usedWidth = actualColumns * slotWidth;
+        int startX = zoneX + Math.max(0, (zoneWidth - usedWidth) / 2);
+        for (int index = 0; index < assets.size(); index++) {
+            int row = index / actualColumns;
+            int column = index % actualColumns;
+            int centerX = startX + column * slotWidth + slotWidth / 2;
+            int centerY = fromBottom
+                    ? firstCenterY - row * rowStep
+                    : firstCenterY + row * rowStep;
+            place(assets.get(index), centerX, centerY, widths, metrics, panelWidth, positions, glyphs, labels);
+        }
+    }
+
+    private void placeColumns(List<NetworkAsset> assets, int columns, int rows, int zoneX, int firstCenterY,
+                              int zoneWidth, int slotWidth, Map<String, Integer> widths, FontMetrics metrics,
+                              int panelWidth, int rowStep,
+                              Map<String, Point> positions, Map<String, Rectangle> glyphs,
+                              Map<String, Rectangle> labels) {
+        if (assets.isEmpty()) return;
+        int actualColumns = Math.max(1, columns);
+        int actualRows = Math.max(1, rows);
+        int startX = zoneX + Math.max(0, (zoneWidth - actualColumns * slotWidth) / 2);
+        for (int index = 0; index < assets.size(); index++) {
+            int column = index / actualRows;
+            int row = index % actualRows;
+            int centerX = startX + column * slotWidth + slotWidth / 2;
+            int centerY = firstCenterY + row * rowStep;
+            place(assets.get(index), centerX, centerY, widths, metrics, panelWidth, positions, glyphs, labels);
+        }
+    }
+
+    private void place(NetworkAsset asset, int centerX, int centerY, Map<String, Integer> widths,
+                       FontMetrics metrics, int panelWidth, Map<String, Point> positions,
+                       Map<String, Rectangle> glyphs, Map<String, Rectangle> labels) {
+        Point center = new Point(centerX, centerY);
+        int labelWidth = widths.get(asset.getId()) + LABEL_PADDING * 2;
+        int labelHeight = metrics.getHeight() + 2;
+        int left = Math.max(PANEL_MARGIN, Math.min(centerX - labelWidth / 2,
+            Math.max(PANEL_MARGIN, panelWidth - PANEL_MARGIN - labelWidth)));
+        Rectangle label = new Rectangle(left, centerY + GLYPH_HALF_SIZE + LABEL_GAP,
+                labelWidth, labelHeight);
+        positions.put(asset.getId(), center);
+        glyphs.put(asset.getId(), new Rectangle(centerX - GLYPH_HALF_SIZE, centerY - GLYPH_HALF_SIZE,
+                GLYPH_HALF_SIZE * 2, GLYPH_HALF_SIZE * 2));
+        labels.put(asset.getId(), label);
     }
 
     private void drawLink(Graphics2D g, Link link) {
@@ -135,7 +267,7 @@ public class NetworkMapPanel extends JPanel implements AlertListener {
         g.drawLine(source.x, source.y, target.x, target.y);
     }
 
-    private void drawNode(Graphics2D g, NetworkAsset asset) {
+    private void drawNodeGlyph(Graphics2D g, NetworkAsset asset) {
         Point center = nodePositions.get(asset.getId());
         if (center == null) return;
         g.setColor(statusColor(asset.getStatus()));
@@ -146,7 +278,6 @@ public class NetworkMapPanel extends JPanel implements AlertListener {
             g.setStroke(new BasicStroke(1f));
             g.draw(new Ellipse2D.Double(center.x - 18, center.y - 18, 36, 36));
         }
-        drawHostName(g, asset.getName(), center);
     }
 
     private void drawGlyph(Graphics2D g, AssetType type, Point center) {
@@ -182,13 +313,15 @@ public class NetworkMapPanel extends JPanel implements AlertListener {
         }
     }
 
-    private void drawHostName(Graphics2D g, String name, Point center) {
+    private void drawHostName(Graphics2D g, NetworkAsset asset) {
+        Rectangle bounds = labelBounds.get(asset.getId());
+        if (bounds == null) return;
+        g.setColor(FOREST);
+        g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
         g.setColor(MUTED_ON_FOREST);
         g.setFont(new Font("IBM Plex Mono", Font.PLAIN, 12));
         FontMetrics metrics = g.getFontMetrics();
-        int x = center.x - metrics.stringWidth(name) / 2;
-        x = Math.max(PANEL_MARGIN, Math.min(x, getWidth() - PANEL_MARGIN - metrics.stringWidth(name)));
-        g.drawString(name, x, center.y + NODE_LABEL_OFFSET);
+        g.drawString(asset.getName(), bounds.x + LABEL_PADDING, bounds.y + metrics.getAscent());
     }
 
     private Color statusColor(AssetStatus status) {
@@ -207,12 +340,12 @@ public class NetworkMapPanel extends JPanel implements AlertListener {
             } catch (ConcurrentModificationException exception) {
                 return;
             }
-            ensureLayout(getWidth(), getHeight(), assets);
+            recomputeLayout(getWidth(), getHeight(), assets);
         }
         NetworkAsset match = null;
         for (NetworkAsset asset : layoutAssets) {
-            Point center = nodePositions.get(asset.getId());
-            if (center != null && center.distance(x, y) <= HIT_RADIUS) {
+            Rectangle bounds = nodeBounds.get(asset.getId());
+            if (bounds != null && bounds.contains(x, y)) {
                 match = asset;
                 break;
             }

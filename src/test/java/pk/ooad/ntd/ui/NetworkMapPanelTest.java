@@ -10,6 +10,7 @@ import javax.swing.JLabel;
 import javax.swing.SwingUtilities;
 import java.awt.Color;
 import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.lang.reflect.Field;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -72,6 +74,42 @@ class NetworkMapPanelTest {
         assertNull(selectedAsset(panel));
     }
 
+    @Test
+    void groupedLayoutKeepsLabelsAndGlyphsDisjointAndInside1366By768Panel() throws Exception {
+        Network network = TopologyLoader.loadSample();
+        NetworkMapPanel panel = new NetworkMapPanel(new IncidentResponseFacade(network, 94L), new HostPanel());
+        panel.setSize(1366, 768);
+        paint(panel);
+
+        Map<String, Point> firstLayout = nodePositions(panel);
+        Map<String, Rectangle> glyphs = nodeBounds(panel);
+        Map<String, Rectangle> labels = labelBounds(panel);
+        paint(panel);
+        assertEquals(firstLayout, nodePositions(panel));
+        assertEquals(network.getAssets().size(), labels.size());
+
+        for (String id : labels.keySet()) {
+            Rectangle label = labels.get(id);
+            assertTrue(label.x >= 32 && label.y >= 32);
+            assertTrue(label.x + label.width <= panel.getWidth() - 32);
+            assertTrue(label.y + label.height <= panel.getHeight() - 32);
+            for (Map.Entry<String, Rectangle> glyph : glyphs.entrySet()) {
+                assertFalse(label.intersects(glyph.getValue()),
+                        "Label for " + id + " overlaps glyph for " + glyph.getKey());
+            }
+            for (Map.Entry<String, Rectangle> otherLabel : labels.entrySet()) {
+                if (!id.equals(otherLabel.getKey())) {
+                    assertFalse(label.intersects(otherLabel.getValue()),
+                            "Label rectangles overlap for " + id + " and " + otherLabel.getKey());
+                }
+            }
+        }
+        for (Point position : firstLayout.values()) {
+            assertTrue(position.x - 15 >= 0 && position.x + 15 < panel.getWidth());
+            assertTrue(position.y - 15 >= 0 && position.y + 15 < panel.getHeight());
+        }
+    }
+
     private BufferedImage paint(NetworkMapPanel panel) {
         BufferedImage image = new BufferedImage(panel.getWidth(), panel.getHeight(), BufferedImage.TYPE_INT_ARGB);
         var graphics = image.createGraphics();
@@ -110,6 +148,20 @@ class NetworkMapPanelTest {
         Field field = NetworkMapPanel.class.getDeclaredField("selectedAsset");
         field.setAccessible(true);
         return (NetworkAsset) field.get(panel);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Rectangle> nodeBounds(NetworkMapPanel panel) throws ReflectiveOperationException {
+        Field field = NetworkMapPanel.class.getDeclaredField("nodeBounds");
+        field.setAccessible(true);
+        return (Map<String, Rectangle>) field.get(panel);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Rectangle> labelBounds(NetworkMapPanel panel) throws ReflectiveOperationException {
+        Field field = NetworkMapPanel.class.getDeclaredField("labelBounds");
+        field.setAccessible(true);
+        return (Map<String, Rectangle>) field.get(panel);
     }
 
     private JLabel findLabel(java.awt.Component component, String name) {
