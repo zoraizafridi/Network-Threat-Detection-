@@ -3,12 +3,11 @@
 Single source of truth for every class, attribute, operation and relationship.
 Names in code must match this file exactly.
 
-## Open issue (decide before the service and response phase)
+## Resolved decision
 
-ReportGenerator (response) uses Incident (service), which breaks the dependency rule
-(response depends only on domain). Fix by EITHER moving ReportGenerator to service OR
-moving Incident and IncidentStatus to domain. Update the Modelio model to match.
-Until the owner decides, do not implement ReportGenerator, Incident or IncidentManager.
+ReportGenerator lives in the service package, because it uses Incident (also in service).
+This keeps the dependency rule: response depends only on domain.
+IncidentStatus is in the domain package (it is implemented there).
 
 ```
 PROJECT CONTEXT
@@ -34,8 +33,7 @@ RULES AND DECISIONS
   domain (and util for ConfigManager); service depends on domain+detection (+simulation,
   response); response depends only on domain; ui depends only on the facade + domain (read only).
 - BackboneResult, AssignmentResult, ResponsePlan live in domain (so ui does not depend on response).
-- KNOWN OPEN ISSUE: ReportGenerator (response) uses Incident (service). Fix by moving
-  ReportGenerator to service OR moving Incident/IncidentStatus to domain.
+- RESOLVED: ReportGenerator lives in the service package (it uses Incident, also in service).
 - Show a relationship as an arrow OR an attribute, never both.
 - Omit getters/setters. Mark abstract classes and static members.
 - NetworkEvent is immutable with NO "malicious" field (detectors never see ground truth).
@@ -85,10 +83,12 @@ User {abstract}: -username:String -passwordHash:String | +checkPassword(raw:Stri
   +{abstract}canLaunchAttack() +{abstract}canRunPlanner() +{abstract}canConfigure() +{abstract}canManageUsers(): boolean
 Admin (all true), SecurityAnalyst (launch/plan/export true; configure/manage false), Viewer (all false)
 AnalystTeam: -id:String -name:String -skills:Set<String> -capacity:int -available:boolean | +canHandle(t:MitigationTask):boolean
-MitigationTask: -id:String -target:NetworkAsset -value:int -cost:int -requiredSkill:String
+MitigationTask: -id:String -target:NetworkAsset -value:int -cost:int -requiredSkill:String -daysUnpatched:int
+  (value is the base value; the facade computes the final decayed value once, before the DP,
+   as value * (1 + decay.rate * daysUnpatched))
 AuthenticationException (extends Exception)
 BackboneResult: -chosenLinks:List<Link> -totalWeight:double -connected:boolean -unreachable:List<NetworkAsset>
-AssignmentResult: -assignments:Map<AnalystTeam,List<MitigationTask>> -totalValue:int -dpTable:int[][]
+AssignmentResult: -assignments:Map<AnalystTeam,List<MitigationTask>> -totalValue:int -excluded:List<MitigationTask> -stateCount:long
 ResponsePlan: has composition to BackboneResult (backbone) and AssignmentResult (assignment)
 
 PACKAGE simulation (8)
@@ -125,14 +125,19 @@ Incident: -id:String -sourceIp:String -openedAt:Instant -status:IncidentStatus |
 IncidentManager (implements AlertListener): -correlationWindowSeconds:int | +onAlert(a) +getIncidents() +reset()
 SOC: +addTeam(t:AnalystTeam) +getAvailableTeams():List<AnalystTeam>
 AuthService: +login(username:String,password:String):User   [throws AuthenticationException]
-
-PACKAGE response (4)
-BackbonePlanner: +plan(network:Network):BackboneResult -edgeWeight(l:Link):double (baseCost + risk penalty; excludes compromised)
-UnionFind: -parent:int[] -rank:int[] | +find(x:int):int (path compression) +union(a:int,b:int):boolean (by rank)
-AssignmentPlanner: +plan(tasks:List<MitigationTask>,teams:List<AnalystTeam>):AssignmentResult
-  -buildTable(...):int[][] -backtrack(...):Map<AnalystTeam,List<MitigationTask>>
-  (formulation must match the DAA brief; this is a knapsack-style placeholder)
 ReportGenerator: +generate(incidents:List<Incident>,network:Network,plan:ResponsePlan):String +export(report:String,path:String):void
+
+PACKAGE response (3)
+BackbonePlanner: +plan(network:Network):BackboneResult -edgeWeight(l:Link):double
+  (edgeWeight returns baseCost only; only links not COMPROMISED are candidates;
+   sort by cost asc, then combined endpoint riskScore desc, then link id asc;
+   SOC host id read from ConfigManager key soc.host.id;
+   unreachable = hosts outside the SOC's component, by name)
+UnionFind: -parent:int[] -rank:int[] | +find(x:int):int (path compression) +union(a:int,b:int):boolean (by rank)
+AssignmentPlanner: +plan(tasks:List<MitigationTask>,teams:List<AnalystTeam>):AssignmentResult -buildTable(...) -backtrack(...)
+  (exact multiple knapsack DP, task weight = cost, value = value, team capacity = effort hours;
+   tasks heavier than every team go to excluded; skills and canHandle are not used by the DP;
+   guard: ConfigManager key dp.max.states)
 
 PACKAGE ui (9)  - holds only the facade; no detection/algorithm code
 LoginFrame: -usernameField:JTextField -passwordField:JPasswordField | +onLoginClicked()

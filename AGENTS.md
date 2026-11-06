@@ -38,6 +38,5 @@ domain, simulation, detection, service, response, ui, util, web
 - Run `mvn clean test` before every commit. Never commit target/.
 - One git branch per feature, small commits.
 - Use a seeded java.util.Random and an injectable java.time.Clock so tests are reproducible.
-- Do not implement ReportGenerator, Incident or IncidentManager until the open issue at the top of docs/class-spec.md is resolved.
 - Never use the em dash character (U+2014) in code, comments, UI text or docs.
 - Never edit docs/class-spec.md or docs/ui-spec.md. If the spec seems wrong, stop and tell me.
