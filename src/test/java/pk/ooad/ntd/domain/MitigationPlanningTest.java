@@ -108,12 +108,12 @@ class MitigationPlanningTest {
 
         AnalystTeam team = new AnalystTeam("team-1", "Alpha", Set.of("SKILL_A"), 50, true);
         MitigationTask task = new MitigationTask("t1", s1, 90, 20, "SKILL_A");
-        int[][] dpTable = new int[][]{{0, 0}, {0, 90}};
-        AssignmentResult assignment = new AssignmentResult(Map.of(team, List.of(task)), 90, dpTable);
+        AssignmentResult assignment = new AssignmentResult(Map.of(team, List.of(task)), 90, List.of(), 2L);
 
         assertEquals(1, assignment.getAssignments().size());
         assertEquals(90, assignment.getTotalValue());
-        assertEquals(dpTable, assignment.getDpTable());
+        assertTrue(assignment.getExcluded().isEmpty());
+        assertEquals(2L, assignment.getStateCount());
         assertNotNull(assignment.toString());
 
         // ResponsePlan composition

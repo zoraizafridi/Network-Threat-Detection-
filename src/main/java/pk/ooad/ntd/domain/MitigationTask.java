@@ -8,13 +8,19 @@ public class MitigationTask {
     private final int value;
     private final int cost;
     private final String requiredSkill;
+    private final int daysUnpatched;
 
     public MitigationTask(String id, NetworkAsset target, int value, int cost, String requiredSkill) {
+        this(id, target, value, cost, requiredSkill, 0);
+    }
+
+    public MitigationTask(String id, NetworkAsset target, int value, int cost, String requiredSkill, int daysUnpatched) {
         this.id = Objects.requireNonNull(id, "id must not be null");
         this.target = Objects.requireNonNull(target, "target must not be null");
         this.value = value;
         this.cost = cost;
         this.requiredSkill = requiredSkill != null ? requiredSkill : "";
+        this.daysUnpatched = daysUnpatched;
     }
 
     public String getId() {
@@ -35,6 +41,10 @@ public class MitigationTask {
 
     public String getRequiredSkill() {
         return requiredSkill;
+    }
+
+    public int getDaysUnpatched() {
+        return daysUnpatched;
     }
 
     @Override

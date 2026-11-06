@@ -3,9 +3,10 @@ package pk.ooad.ntd.response;
 import pk.ooad.ntd.domain.AnalystTeam;
 import pk.ooad.ntd.domain.AssignmentResult;
 import pk.ooad.ntd.domain.MitigationTask;
+import pk.ooad.ntd.util.ConfigManager;
 
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,106 +16,127 @@ public class AssignmentPlanner {
     public AssignmentResult plan(List<MitigationTask> tasks, List<AnalystTeam> teams) {
         Objects.requireNonNull(tasks, "tasks must not be null");
         Objects.requireNonNull(teams, "teams must not be null");
-        List<MitigationTask> taskList = List.copyOf(tasks);
-        if (taskList.stream().anyMatch(task -> task.getCost() < 0)) {
+        List<AnalystTeam> teamList = List.copyOf(teams);
+        if (teamList.size() > 4) {
+            throw new IllegalArgumentException("Multiple-knapsack planning supports at most 4 teams");
+        }
+        if (teamList.stream().anyMatch(team -> team.getCapacity() < 0)) {
+            throw new IllegalArgumentException("Team capacities must not be negative");
+        }
+
+        List<MitigationTask> orderedTasks = new ArrayList<>(tasks);
+        orderedTasks.sort(Comparator.comparing(MitigationTask::getId));
+        if (orderedTasks.stream().anyMatch(task -> task.getCost() < 0)) {
             throw new IllegalArgumentException("Mitigation task costs must not be negative");
         }
-        List<AnalystTeam> availableTeams = teams.stream().filter(AnalystTeam::isAvailable).toList();
-        int stateCount = stateCount(availableTeams);
-        int[][] table = buildTable(taskList, availableTeams, stateCount);
-        Map<AnalystTeam, List<MitigationTask>> assignments = backtrack(taskList, availableTeams, table, stateCount);
-        int total = assignments.values().stream().flatMap(List::stream).mapToInt(MitigationTask::getValue).sum();
-        return new AssignmentResult(assignments, total, table);
+        List<MitigationTask> excluded = new ArrayList<>();
+        List<MitigationTask> eligible = new ArrayList<>();
+        int maxCapacity = teamList.stream().mapToInt(AnalystTeam::getCapacity).max().orElse(-1);
+        for (MitigationTask task : orderedTasks) {
+            if (teamList.isEmpty() || task.getCost() > maxCapacity) excluded.add(task);
+            else eligible.add(task);
+        }
+        if (eligible.isEmpty()) return new AssignmentResult(Map.of(), 0, excluded, 0L);
+
+        int[] capacities = teamList.stream().mapToInt(AnalystTeam::getCapacity).toArray();
+        int[] multipliers = new int[capacities.length];
+        int maxStates = ConfigManager.getInstance().getInt("dp.max.states", 2_000_000);
+        if (maxStates < 1) {
+            throw new IllegalArgumentException("dp.max.states must be at least 1");
+        }
+        long capacityStates = capacityStateCount(capacities, multipliers);
+        long stateCount = Math.multiplyExact((long) eligible.size(), capacityStates);
+        if (stateCount > maxStates) {
+            throw new IllegalArgumentException("DP state count " + stateCount
+                    + " exceeds configured dp.max.states=" + maxStates);
+        }
+        long tableSize = Math.multiplyExact((long) eligible.size() + 1L, capacityStates);
+        if (tableSize > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("DP table requires " + tableSize
+                    + " cells, which exceeds the supported flat-array size");
+        }
+
+        int[] values = new int[(int) tableSize];
+        byte[] choices = new byte[(int) tableSize];
+        buildTable(eligible, teamList, capacities, multipliers, (int) capacityStates, values, choices);
+        Map<AnalystTeam, List<MitigationTask>> assignments = backtrack(
+                eligible, teamList, capacities, multipliers, (int) capacityStates, values, choices);
+        int fullCapacityState = (int) capacityStates - 1;
+        int totalValue = values[eligible.size() * (int) capacityStates + fullCapacityState];
+        return new AssignmentResult(assignments, totalValue, excluded, stateCount);
     }
 
-    private int[][] buildTable(List<MitigationTask> tasks, List<AnalystTeam> teams, int stateCount) {
-        int[][] table = new int[tasks.size() + 1][stateCount];
-        for (int[] row : table) java.util.Arrays.fill(row, Integer.MIN_VALUE);
-        table[0][0] = 0;
-        int[] multipliers = multipliers(teams);
-        for (int taskIndex = 0; taskIndex < tasks.size(); taskIndex++) {
-            MitigationTask task = tasks.get(taskIndex);
-            for (int state = 0; state < stateCount; state++) {
-                int currentValue = table[taskIndex][state];
-                if (currentValue == Integer.MIN_VALUE) continue;
-                table[taskIndex + 1][state] = Math.max(table[taskIndex + 1][state], currentValue);
+    private void buildTable(List<MitigationTask> tasks, List<AnalystTeam> teams, int[] capacities,
+                            int[] multipliers, int capacityStates, int[] values, byte[] choices) {
+        for (int i = 1; i <= tasks.size(); i++) {
+            MitigationTask task = tasks.get(i - 1);
+            int previousOffset = (i - 1) * capacityStates;
+            int currentOffset = i * capacityStates;
+            System.arraycopy(values, previousOffset, values, currentOffset, capacityStates);
+            for (int state = 0; state < capacityStates; state++) {
                 for (int teamIndex = 0; teamIndex < teams.size(); teamIndex++) {
-                    AnalystTeam team = teams.get(teamIndex);
-                    if (!team.canHandle(task) || usedCapacity(state, teamIndex, teams, multipliers) + task.getCost() > team.getCapacity()) {
-                        continue;
+                    if (usedCapacity(state, teamIndex, capacities, multipliers) < task.getCost()) continue;
+                    int previousState = state - task.getCost() * multipliers[teamIndex];
+                    int candidateValue = Math.addExact(values[previousOffset + previousState], task.getValue());
+                    int currentIndex = currentOffset + state;
+                    byte existingChoice = choices[currentIndex];
+                    byte candidateChoice = (byte) (teamIndex + 1);
+                    if (candidateValue > values[currentIndex]
+                            || (candidateValue == values[currentIndex] && existingChoice != 0
+                            && candidateChoice < existingChoice)) {
+                        values[currentIndex] = candidateValue;
+                        choices[currentIndex] = candidateChoice;
                     }
-                    int nextState = state + task.getCost() * multipliers[teamIndex];
-                    table[taskIndex + 1][nextState] = Math.max(table[taskIndex + 1][nextState], currentValue + task.getValue());
+                }
+                if (values[previousOffset + state] == Integer.MIN_VALUE) {
+                    values[currentOffset + state] = Integer.MIN_VALUE;
                 }
             }
         }
-        return table;
     }
 
     private Map<AnalystTeam, List<MitigationTask>> backtrack(List<MitigationTask> tasks, List<AnalystTeam> teams,
-                                                             int[][] table, int stateCount) {
-        Map<AnalystTeam, List<MitigationTask>> result = new LinkedHashMap<>();
-        for (AnalystTeam team : teams) result.put(team, new ArrayList<>());
-        int[] multipliers = multipliers(teams);
-        int bestState = 0;
-        int bestValue = 0;
-        for (int state = 0; state < stateCount; state++) {
-            int value = table[tasks.size()][state];
-            if (value > bestValue) {
-                bestValue = value;
-                bestState = state;
-            }
+                                                              int[] capacities, int[] multipliers,
+                                                              int capacityStates, int[] values, byte[] choices) {
+        Map<AnalystTeam, List<MitigationTask>> assignments = new LinkedHashMap<>();
+        for (AnalystTeam team : teams) assignments.put(team, new ArrayList<>());
+        int state = capacityStates - 1;
+        for (int taskIndex = tasks.size(); taskIndex > 0; taskIndex--) {
+            byte choice = choices[taskIndex * capacityStates + state];
+            if (choice == 0) continue;
+            int teamIndex = choice - 1;
+            MitigationTask task = tasks.get(taskIndex - 1);
+            assignments.get(teams.get(teamIndex)).add(task);
+            state -= task.getCost() * multipliers[teamIndex];
         }
-        int state = bestState;
-        for (int taskIndex = tasks.size() - 1; taskIndex >= 0; taskIndex--) {
-            int value = table[taskIndex + 1][state];
-            if (table[taskIndex][state] == value) continue;
-            MitigationTask task = tasks.get(taskIndex);
-            boolean assigned = false;
-            for (int teamIndex = teams.size() - 1; teamIndex >= 0; teamIndex--) {
-                int step = task.getCost() * multipliers[teamIndex];
-                int previousState = state - step;
-                if (previousState >= 0 && table[taskIndex][previousState] != Integer.MIN_VALUE
-                        && table[taskIndex][previousState] + task.getValue() == value
-                        && teams.get(teamIndex).canHandle(task)) {
-                    result.get(teams.get(teamIndex)).add(task);
-                    state = previousState;
-                    assigned = true;
-                    break;
-                }
-            }
-            if (!assigned && table[taskIndex][state] != value) {
-                throw new IllegalStateException("Unable to reconstruct task assignment");
-            }
+        for (List<MitigationTask> assigned : assignments.values()) {
+            assigned.sort(Comparator.comparing(MitigationTask::getId));
         }
-        for (List<MitigationTask> assignedTasks : result.values()) Collections.reverse(assignedTasks);
-        result.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-        return result;
+        assignments.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+        return assignments;
     }
 
-    private int stateCount(List<AnalystTeam> teams) {
-        long count = 1;
-        for (AnalystTeam team : teams) {
-            count *= (long) team.getCapacity() + 1L;
-            if (team.getCapacity() < 0 || count > 1_000_000L) {
-                throw new IllegalArgumentException("Combined analyst capacity is too large for the DP table");
+    private long capacityStateCount(int[] capacities, int[] multipliers) {
+        long count = 1L;
+        for (int i = 0; i < capacities.length; i++) {
+            if (count > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("DP capacity state product exceeds flat-array indexing limits");
+            }
+            multipliers[i] = (int) count;
+            try {
+                count = Math.multiplyExact(count, (long) capacities[i] + 1L);
+            } catch (ArithmeticException e) {
+                throw new IllegalArgumentException("DP capacity state product overflows supported limits", e);
             }
         }
-        return (int) count;
-    }
-
-    private int[] multipliers(List<AnalystTeam> teams) {
-        int[] result = new int[teams.size()];
-        long multiplier = 1;
-        for (int i = 0; i < teams.size(); i++) {
-            result[i] = (int) multiplier;
-            multiplier *= (long) teams.get(i).getCapacity() + 1L;
+        if (count > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("DP capacity state product exceeds flat-array indexing limits");
         }
-        return result;
+        return count;
     }
 
-    private int usedCapacity(int state, int teamIndex, List<AnalystTeam> teams, int[] multipliers) {
-        int radix = teams.get(teamIndex).getCapacity() + 1;
+    private int usedCapacity(int state, int teamIndex, int[] capacities, int[] multipliers) {
+        int radix = capacities[teamIndex] + 1;
         return (state / multipliers[teamIndex]) % radix;
     }
 }

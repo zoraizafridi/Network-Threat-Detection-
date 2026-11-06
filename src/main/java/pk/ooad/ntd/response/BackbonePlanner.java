@@ -1,56 +1,78 @@
 package pk.ooad.ntd.response;
 
+import pk.ooad.ntd.domain.AssetType;
 import pk.ooad.ntd.domain.BackboneResult;
 import pk.ooad.ntd.domain.Link;
 import pk.ooad.ntd.domain.LinkStatus;
 import pk.ooad.ntd.domain.Network;
 import pk.ooad.ntd.domain.NetworkAsset;
+import pk.ooad.ntd.util.ConfigManager;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Queue;
-import java.util.Set;
 
 public class BackbonePlanner {
     public BackboneResult plan(Network network) {
         Objects.requireNonNull(network, "network must not be null");
-        List<NetworkAsset> assets = new ArrayList<>(network.getAssets());
-        Map<NetworkAsset, Integer> indexes = new HashMap<>();
-        for (int i = 0; i < assets.size(); i++) indexes.put(assets.get(i), i);
+        List<NetworkAsset> hosts = new ArrayList<>(network.getAssets());
+        hosts.sort(Comparator.comparing(NetworkAsset::getName).thenComparing(NetworkAsset::getId));
+        if (hosts.isEmpty()) return new BackboneResult(List.of(), 0.0, true, List.of());
 
+        Map<NetworkAsset, Integer> indexes = new HashMap<>();
+        for (int i = 0; i < hosts.size(); i++) indexes.put(hosts.get(i), i);
         List<Link> candidates = network.getLinks().stream()
                 .filter(link -> link.getStatus() != LinkStatus.COMPROMISED)
-                .sorted(Comparator.comparingDouble(this::edgeWeight).thenComparing(Link::getId))
+                .sorted(Comparator.comparingDouble(this::edgeWeight)
+                        .thenComparing(Comparator.comparingDouble(this::combinedRisk).reversed())
+                        .thenComparing(Link::getId))
                 .toList();
-        UnionFind sets = new UnionFind(assets.size());
-        List<Link> chosen = new ArrayList<>();
+
+        UnionFind sets = new UnionFind(hosts.size());
+        List<Link> chosenLinks = new ArrayList<>();
         double totalWeight = 0.0;
         for (Link link : candidates) {
-            int source = indexes.get(link.getSource());
-            int target = indexes.get(link.getTarget());
-            if (sets.union(source, target)) {
-                chosen.add(link);
+            Integer source = indexes.get(link.getSource());
+            Integer target = indexes.get(link.getTarget());
+            if (source != null && target != null && sets.union(source, target)) {
+                chosenLinks.add(link);
                 totalWeight += edgeWeight(link);
             }
         }
 
-        if (assets.size() <= 1) {
-            return new BackboneResult(chosen, totalWeight, true, List.of());
+        NetworkAsset socHost = getSocHost(network);
+        List<NetworkAsset> unreachable = new ArrayList<>();
+        if (socHost == null) {
+            unreachable.addAll(hosts);
+        } else {
+            int socRoot = sets.find(indexes.get(socHost));
+            for (NetworkAsset host : hosts) {
+                if (sets.find(indexes.get(host)) != socRoot) unreachable.add(host);
+            }
         }
-        int root = sets.find(0);
-        List<NetworkAsset> unreachable = assets.stream()
-                .filter(asset -> sets.find(indexes.get(asset)) != root)
-                .toList();
-        return new BackboneResult(chosen, totalWeight, unreachable.isEmpty(), unreachable);
+        unreachable.sort(Comparator.comparing(NetworkAsset::getName).thenComparing(NetworkAsset::getId));
+        return new BackboneResult(chosenLinks, totalWeight, unreachable.isEmpty(), unreachable);
+    }
+
+    private NetworkAsset getSocHost(Network network) {
+        String configuredId = ConfigManager.getInstance().getString("soc.host.id", null);
+        if (configuredId != null && !configuredId.isBlank()) {
+            return network.getAsset(configuredId.trim());
+        }
+        return network.getAssets().stream()
+                .filter(asset -> asset.getType() == AssetType.ROUTER)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private double combinedRisk(Link link) {
+        return link.getSource().getRiskScore() + link.getTarget().getRiskScore();
     }
 
     private double edgeWeight(Link link) {
-        return link.getBaseCost() + (link.getSource().getRiskScore() + link.getTarget().getRiskScore()) / 100.0;
+        return link.getBaseCost();
     }
 }
