@@ -1,6 +1,8 @@
 package pk.ooad.ntd.ui;
 
 import pk.ooad.ntd.domain.User;
+import pk.ooad.ntd.domain.AssetStatus;
+import pk.ooad.ntd.domain.Network;
 import pk.ooad.ntd.service.IncidentResponseFacade;
 
 import javax.swing.BorderFactory;
@@ -16,11 +18,15 @@ import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.GridLayout;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import javax.swing.SwingUtilities;
 
 public class MainFrame extends JFrame {
     private static final Color GROUND = new Color(0xE8DCC4);
@@ -38,6 +44,11 @@ public class MainFrame extends JFrame {
     private final CardLayout cardLayout;
     private final List<JButton> navigationItems;
     private final JLabel usernameLabel;
+    private final MetricStrip metricStrip;
+    private final JPanel monitorScreen;
+    private final JPanel networkMapPanel;
+    private final HostPanel hostPanel;
+    private int activeAlertCount;
     private JButton selectedItem;
 
     public MainFrame(IncidentResponseFacade facade) {
@@ -49,7 +60,19 @@ public class MainFrame extends JFrame {
         cardLayout = new CardLayout();
         navigationItems = new ArrayList<>();
         usernameLabel = new JLabel(" ");
+        metricStrip = new MetricStrip();
+        monitorScreen = new JPanel(new BorderLayout());
+        networkMapPanel = new JPanel();
+        hostPanel = new HostPanel();
         buildShell();
+        refreshMonitor();
+        facade.addAlertListener(alert -> SwingUtilities.invokeLater(() -> {
+            if (!isDisplayable()) return;
+            activeAlertCount++;
+            refreshMonitor();
+            monitorScreen.revalidate();
+            monitorScreen.repaint();
+        }));
     }
 
     private void buildShell() {
@@ -139,6 +162,11 @@ public class MainFrame extends JFrame {
         screenCards.setLayout(cardLayout);
         screenCards.setBackground(GROUND);
         for (String name : SCREEN_NAMES) {
+            if (name.equals("Monitor")) {
+                buildMonitorScreen();
+                screenCards.add(monitorScreen, name);
+                continue;
+            }
             JPanel placeholder = new JPanel(new BorderLayout());
             placeholder.setBackground(GROUND);
             placeholder.setBorder(BorderFactory.createEmptyBorder(24, 32, 24, 32));
@@ -150,6 +178,52 @@ public class MainFrame extends JFrame {
         }
         contentPanel.setBackground(GROUND);
         contentPanel.add(screenCards, BorderLayout.CENTER);
+    }
+
+    private void buildMonitorScreen() {
+        monitorScreen.setName("monitor.screen");
+        monitorScreen.setBackground(GROUND);
+        monitorScreen.setBorder(BorderFactory.createEmptyBorder(24, 24, 24, 24));
+        monitorScreen.add(metricStrip, BorderLayout.NORTH);
+
+        JPanel body = new JPanel(new GridBagLayout());
+        body.setName("monitor.body");
+        body.setBackground(GROUND);
+        networkMapPanel.setName("monitor.network-map");
+        networkMapPanel.setBackground(FOREST);
+        networkMapPanel.setMinimumSize(new Dimension(0, 0));
+        networkMapPanel.setPreferredSize(new Dimension(0, 0));
+        hostPanel.setName("monitor.host-panel");
+        hostPanel.setMinimumSize(new Dimension(0, 0));
+        hostPanel.setPreferredSize(new Dimension(0, 0));
+        GridBagConstraints mapConstraints = new GridBagConstraints();
+        mapConstraints.gridx = 0;
+        mapConstraints.gridy = 0;
+        mapConstraints.weightx = 0.67;
+        mapConstraints.weighty = 1;
+        mapConstraints.fill = GridBagConstraints.BOTH;
+        mapConstraints.insets = new java.awt.Insets(24, 0, 0, 32);
+        body.add(networkMapPanel, mapConstraints);
+
+        GridBagConstraints hostConstraints = new GridBagConstraints();
+        hostConstraints.gridx = 1;
+        hostConstraints.gridy = 0;
+        hostConstraints.weightx = 0.33;
+        hostConstraints.weighty = 1;
+        hostConstraints.fill = GridBagConstraints.BOTH;
+        hostConstraints.insets = new java.awt.Insets(24, 0, 0, 0);
+        body.add(hostPanel, hostConstraints);
+        monitorScreen.add(body, BorderLayout.CENTER);
+    }
+
+    private void refreshMonitor() {
+        Network network = facade.getNetwork();
+        long hosts = network.getAssets().size();
+        long compromisedHosts = network.getAssets().stream()
+                .filter(asset -> asset.getStatus() == AssetStatus.COMPROMISED)
+                .count();
+        long compromisedLinks = network.getCompromisedLinks().size();
+        metricStrip.update(hosts, activeAlertCount, compromisedHosts, compromisedLinks);
     }
 
     private void showScreen(String name) {
@@ -173,5 +247,57 @@ public class MainFrame extends JFrame {
 
     boolean isAdminItemVisible() {
         return navigationItems.get(navigationItems.size() - 1).isVisible();
+    }
+
+    HostPanel hostPanel() {
+        return hostPanel;
+    }
+
+    private static final class MetricStrip extends JPanel {
+        private static final Color LINE = new Color(0xC9BA9A);
+        private static final Color INK = new Color(0x1F3D2B);
+        private final JLabel[] figures = new JLabel[4];
+
+        private MetricStrip() {
+            super();
+            setName("monitor.metric-strip");
+            setOpaque(false);
+            setLayout(new GridLayout(1, 4));
+            String[] labels = {"Hosts", "Active alerts", "Hosts compromised", "Links compromised"};
+            for (int index = 0; index < labels.length; index++) {
+                JPanel figure = new JPanel();
+                figure.setName("monitor.metric.column." + index);
+                figure.setOpaque(false);
+                figure.setLayout(new BoxLayout(figure, BoxLayout.Y_AXIS));
+                if (index < labels.length - 1) {
+                    figure.setBorder(BorderFactory.createCompoundBorder(
+                            BorderFactory.createMatteBorder(0, 0, 0, 1, LINE),
+                            BorderFactory.createEmptyBorder(0, 16, 16, 16)));
+                } else {
+                    figure.setBorder(BorderFactory.createEmptyBorder(0, 16, 16, 16));
+                }
+                figures[index] = new JLabel("0");
+                figures[index].setName("monitor.metric." + index + ".value");
+                figures[index].setForeground(INK);
+                figures[index].setFont(new Font("IBM Plex Mono", Font.PLAIN, 28));
+                JLabel label = new JLabel(labels[index]);
+                label.setName("monitor.metric." + index + ".label");
+                label.setForeground(INK);
+                label.setFont(label.getFont().deriveFont(Font.PLAIN, 12f));
+                figures[index].setAlignmentX(LEFT_ALIGNMENT);
+                label.setAlignmentX(LEFT_ALIGNMENT);
+                figure.add(figures[index]);
+                figure.add(Box.createVerticalStrut(4));
+                figure.add(label);
+                add(figure);
+            }
+        }
+
+        private void update(long hosts, int alerts, long compromisedHosts, long compromisedLinks) {
+            long[] values = {hosts, alerts, compromisedHosts, compromisedLinks};
+            for (int index = 0; index < values.length; index++) {
+                figures[index].setText(Long.toString(values[index]));
+            }
+        }
     }
 }
