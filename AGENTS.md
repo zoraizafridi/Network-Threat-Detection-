@@ -17,6 +17,7 @@ domain, simulation, detection, service, response, ui, util, web
 - service depends on domain, detection, simulation, response, util.
 - ui and web depend only on service (IncidentResponseFacade) and domain (read-only).
 - ui contains no detection or algorithm code.
+- Exception: ui may import detection.AlertListener (the interface only), because the spec has ui panels implement it. ui must import nothing else from detection.
 
 ## Design rules
 - Patterns, only these five: Strategy (Detector), Observer (AlertBus/AlertListener),
