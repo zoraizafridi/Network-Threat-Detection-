@@ -1,22 +1,23 @@
-import { useEffect, useRef, useState } from "react";
-import { BrowserRouter, Route, Routes, useLocation, type Location } from "react-router-dom";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, type Location } from "react-router-dom";
 import { gsap } from "gsap";
 import { ENTER_MS, LEAVE_MS, STAGGER_S } from "./scene";
-import { AdminPage } from "./pages/Admin";
-import { AlertsPage } from "./pages/Alerts";
-import { AttackLab } from "./pages/AttackLab";
-import { ControlPage } from "./pages/Control";
-import { HostDetail, HostsPage } from "./pages/Hosts";
-import { IncidentsPage } from "./pages/Incidents";
-import { SceneHost } from "./components/SceneHost";
 import { Landing } from "./pages/Landing";
 import { Login } from "./pages/Login";
 import { Roles } from "./pages/Roles";
-import { Overview } from "./pages/Overview";
-import { PlannerPage } from "./pages/Planner";
-import { ReportsPage } from "./pages/Reports";
-import { Shell } from "./pages/Shell";
 import { useReducedMotion } from "./useReducedMotion";
+
+const Shell = lazy(() => import("./pages/Shell").then((module) => ({ default: module.Shell })));
+const Overview = lazy(() => import("./pages/Overview").then((module) => ({ default: module.Overview })));
+const AttackLab = lazy(() => import("./pages/AttackLab").then((module) => ({ default: module.AttackLab })));
+const AlertsPage = lazy(() => import("./pages/Alerts").then((module) => ({ default: module.AlertsPage })));
+const IncidentsPage = lazy(() => import("./pages/Incidents").then((module) => ({ default: module.IncidentsPage })));
+const HostsPage = lazy(() => import("./pages/Hosts").then((module) => ({ default: module.HostsPage })));
+const HostDetail = lazy(() => import("./pages/Hosts").then((module) => ({ default: module.HostDetail })));
+const PlannerPage = lazy(() => import("./pages/Planner").then((module) => ({ default: module.PlannerPage })));
+const ReportsPage = lazy(() => import("./pages/Reports").then((module) => ({ default: module.ReportsPage })));
+const ControlPage = lazy(() => import("./pages/Control").then((module) => ({ default: module.ControlPage })));
+const AdminPage = lazy(() => import("./pages/Admin").then((module) => ({ default: module.AdminPage })));
 
 function RouteStage() {
   const location = useLocation();
@@ -46,7 +47,7 @@ function RouteStage() {
       ease: "power3.out",
       onComplete: () => setShown(location),
     });
-    return () => tween.kill();
+    return () => { tween.kill(); };
   }, [location, reduced, shown.key, shown.pathname]);
 
   useEffect(() => {
@@ -78,9 +79,23 @@ function RouteStage() {
   return (
     <div className="app-stage">
       <div ref={panel} className="route-stage">
-        <AppRoutes location={shown} />
+        <Suspense fallback={<p className="route-loading">Loading</p>}>
+          <AppRoutes location={shown} />
+        </Suspense>
       </div>
     </div>
+  );
+}
+
+function PortalNotFound() {
+  return (
+    <section className="page">
+      <header className="page-head">
+        <h1>Not found</h1>
+        <p>That portal route does not exist.</p>
+      </header>
+      <p><Link to="/portal">Back to overview</Link></p>
+    </section>
   );
 }
 
@@ -92,6 +107,7 @@ export function AppRoutes({ location }: { location?: Location }) {
       <Route path="/login" element={<Login />} />
       <Route path="/portal" element={<Shell />}>
         <Route index element={<Overview />} />
+        <Route path="overview" element={<Navigate to="/portal" replace />} />
         <Route path="attack" element={<AttackLab />} />
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="incidents" element={<IncidentsPage />} />
@@ -101,18 +117,14 @@ export function AppRoutes({ location }: { location?: Location }) {
         <Route path="reports" element={<ReportsPage />} />
         <Route path="control" element={<ControlPage />} />
         <Route path="admin" element={<AdminPage />} />
+        <Route path="*" element={<PortalNotFound />} />
       </Route>
     </Routes>
   );
 }
 
 export function AppTree() {
-  return (
-    <>
-      <SceneHost />
-      <RouteStage />
-    </>
-  );
+  return <RouteStage />;
 }
 
 export function App() {

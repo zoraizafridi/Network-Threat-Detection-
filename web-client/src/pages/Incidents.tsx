@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { EmptyState, Page, StatusBadge } from "../components/ui";
+import { attackLabel, clockTime, relativeTime } from "../format";
 import { useApp } from "../store";
 
 export function IncidentsPage() {
@@ -36,7 +37,7 @@ export function IncidentsPage() {
                   navigate("/portal");
                 }
               }}>
-                <td>{incident.openedAt}</td>
+                <td className="mono" title={incident.openedAt}>{relativeTime(incident.openedAt)}</td>
                 <td className="mono">{incident.sourceIp}</td>
                 <td><StatusBadge status={incident.status} /></td>
                 <td>{incident.alerts.length}</td>
@@ -51,7 +52,7 @@ export function IncidentsPage() {
           <ol>
             {timeline.map((alert) => (
               <li key={alert.id}>
-                <span className="mono small">{alert.timestamp}</span> {alert.severity} {alert.attackType}
+                <span className="mono small" title={alert.timestamp}>{clockTime(alert.timestamp)}</span> {attackLabel(alert.attackType)}
               </li>
             ))}
           </ol>

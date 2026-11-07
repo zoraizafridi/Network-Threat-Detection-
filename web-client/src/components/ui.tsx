@@ -56,11 +56,10 @@ export function StatusBadge({ status }: { status: string }) {
           ? "ok"
           : "isolated";
   const label = statusLabel(status);
-  const quiet = key === "NORMAL" || key === "HEALTHY";
   return (
-    <span className={`badge ${tone}${quiet ? " is-quiet" : ""}`} title={label}>
+    <span className={`badge ${tone}`} title={label}>
       <i />
-      {quiet ? null : label}
+      {label}
     </span>
   );
 }
@@ -78,7 +77,7 @@ export function MapPanel({
 }) {
   return (
     <Panel title={title} subtitle={subtitle} className={className ? `map-panel ${className}` : "map-panel"}>
-      <div className="map-canvas">{children}</div>
+      <div className="map-canvas" data-map-slot>{children}</div>
     </Panel>
   );
 }

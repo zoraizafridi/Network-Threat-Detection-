@@ -7,7 +7,6 @@ import { EmptyState, MapPanel, Page, Panel, StatusBadge } from "../components/ui
 import { NetworkMap } from "../components/NetworkMap";
 import { accessDenied, canLaunchAttack } from "../permissions";
 import { useApp } from "../store";
-import type { Asset } from "../types";
 
 const TYPES = [
   { id: "PORT_SCAN", label: "Port scan" },

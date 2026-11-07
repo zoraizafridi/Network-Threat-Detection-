@@ -10,6 +10,7 @@ import { groupAlerts, type FeedAlert } from "../alerts";
 import { attackLabel, relativeTime } from "../format";
 import { StatusBadge } from "../components/ui";
 import { useApp } from "../store";
+import { SYSTEM_NAME } from "../brand";
 
 export function Shell() {
   const navigate = useNavigate();
@@ -67,6 +68,10 @@ export function Shell() {
   const [readIds, setReadIds] = useState<string[]>([]);
   const [toasts, setToasts] = useState<FeedAlert[]>([]);
   const seenAlerts = useRef<Set<string> | null>(null);
+  const bellButtonRef = useRef<HTMLButtonElement>(null);
+  const bellPopRef = useRef<HTMLDivElement>(null);
+  const userButtonRef = useRef<HTMLButtonElement>(null);
+  const userPopRef = useRef<HTMLDivElement>(null);
   const setSelectedId = useApp((state) => state.setSelectedId);
   const unread = alerts.filter((alert) => !readIds.includes(alert.id));
   const bellGroups = groupAlerts([...alerts].reverse()).slice(0, 8);
@@ -88,6 +93,34 @@ export function Shell() {
     const timer = window.setTimeout(() => setToasts((current) => current.slice(0, -1)), 6000);
     return () => window.clearTimeout(timer);
   }, [toasts]);
+
+  useEffect(() => {
+    const pop = bellOpen ? bellPopRef.current : userOpen ? userPopRef.current : null;
+    if (!pop) return;
+    const trigger = bellOpen ? bellButtonRef.current : userButtonRef.current;
+    const focusables = () =>
+      Array.from(pop.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+    focusables()[0]?.focus();
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    pop.addEventListener("keydown", onKey);
+    return () => {
+      pop.removeEventListener("keydown", onKey);
+      trigger?.focus();
+    };
+  }, [bellOpen, userOpen]);
 
   function focusAlert(alert: FeedAlert) {
     const host = assets.find((asset) => asset.ip === alert.targetIp) ?? assets.find((asset) => asset.ip === alert.sourceIp);
@@ -136,6 +169,8 @@ export function Shell() {
       if (event.key === "Escape") {
         useApp.getState().setSelectedId(null);
         setOverlay(false);
+        setBellOpen(false);
+        setUserOpen(false);
         return;
       }
       if (typing || event.key !== "[") return;
@@ -159,7 +194,7 @@ export function Shell() {
       <aside className="sidebar">
         <p className="brand">
           <span className="brand-mark" aria-hidden="true" />
-          <span className="brand-name">Field Station</span>
+          <span className="brand-name">{SYSTEM_NAME}</span>
         </p>
         <NavList role={role} alerts={alerts.length} incidents={openIncidents} />
         <div className="side-foot">
@@ -197,14 +232,14 @@ export function Shell() {
             </span>
             {canControlSimulation(role) ? <SimControls /> : null}
             <div className="menu-anchor">
-              <button type="button" className={unread.length > 0 ? "bell has-unread" : "bell"} aria-label="Alerts" aria-expanded={bellOpen} onClick={() => { setBellOpen((value) => !value); setUserOpen(false); }}>
+              <button ref={bellButtonRef} type="button" className={unread.length > 0 ? "bell has-unread" : "bell"} aria-label="Alerts" aria-haspopup="dialog" aria-expanded={bellOpen} aria-controls="bell-pop" onClick={() => { setBellOpen((value) => !value); setUserOpen(false); }}>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M6 9a6 6 0 1 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 13 6 9Z" />
                   <path d="M10 18a2 2 0 0 0 4 0" />
                 </svg>
               </button>
               {bellOpen ? (
-                <div className="menu-pop bell-pop" role="dialog" aria-label="Alerts">
+                <div ref={bellPopRef} id="bell-pop" className="menu-pop bell-pop" role="dialog" aria-modal="true" aria-label="Alerts">
                   <div className="row">
                     <strong>Alerts {unread.length > 0 ? `(${unread.length})` : ""}</strong>
                     <button type="button" onClick={() => setReadIds(alerts.map((alert) => alert.id))}>Mark all read</button>
@@ -214,7 +249,7 @@ export function Shell() {
                     const source = assets.find((asset) => asset.ip === alert.sourceIp)?.name ?? alert.sourceIp;
                     const target = assets.find((asset) => asset.ip === alert.targetIp)?.name ?? alert.targetIp;
                     const stage = alert.description && !alert.description.includes("_") ? alert.description : "";
-                    const simulation = alert.id.startsWith("sim-") || alert.detectorName === "Field station";
+                    const simulation = alert.simulated ?? alert.id.startsWith("sim-");
                     return (
                       <button key={alert.id} type="button" className="alert-pop-row" onClick={() => focusAlert(alert)}>
                         <span><StatusBadge status={alert.severity} /> {attackLabel(alert.attackType)}{group.count > 1 ? <i className="count-chip">x{group.count}</i> : null}</span>
@@ -228,13 +263,13 @@ export function Shell() {
               ) : null}
             </div>
             <div className="menu-anchor">
-              <button type="button" className="user-menu" aria-expanded={userOpen} onClick={() => { setUserOpen((value) => !value); setBellOpen(false); }}>
+              <button ref={userButtonRef} type="button" className="user-menu" aria-label={`Account menu, ${name}`} aria-haspopup="dialog" aria-expanded={userOpen} aria-controls="user-pop" onClick={() => { setUserOpen((value) => !value); setBellOpen(false); }}>
                 <span className="avatar">{name.slice(0, 1).toUpperCase()}</span>
                 <span>{name}</span>
                 <span className="role-chip">{roleLabel}</span>
               </button>
               {userOpen ? (
-                <div className="menu-pop">
+                <div ref={userPopRef} id="user-pop" className="menu-pop" role="dialog" aria-modal="true" aria-label="Account">
                   <button type="button" onClick={logout}>Log out</button>
                 </div>
               ) : null}

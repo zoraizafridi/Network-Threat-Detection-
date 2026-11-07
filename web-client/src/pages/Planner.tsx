@@ -5,8 +5,6 @@ import { NetworkMap } from "../components/NetworkMap";
 import { statusLabel } from "../format";
 import { accessDenied, canRunPlanner } from "../permissions";
 import { useApp } from "../store";
-import type { Asset } from "../types";
-import type { Asset } from "../types";
 import type { PlanBody, SocTeam } from "../types";
 
 interface SavedRun {
@@ -225,7 +223,7 @@ export function PlannerPage() {
               <ul>
                 {(plan.backbone.linkEnds ?? []).map((end) => (
                   <li key={end.id} onMouseEnter={() => setHover(end.id)} onMouseLeave={() => setHover(null)} title={end.id}>
-                    {end.sourceName} — {end.targetName}
+                    {end.sourceName} -&gt; {end.targetName}
                   </li>
                 ))}
               </ul>

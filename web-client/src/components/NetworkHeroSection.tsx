@@ -28,10 +28,10 @@ const HOSTS = [
 ];
 
 const LEGEND = [
-  { label: "Normal 12", color: "#4ADE80" },
-  { label: "Suspicious 3", color: "#FB923C" },
-  { label: "Compromised 1", color: "#FF4B4B" },
-  { label: "Offline 2", color: "#64748B" },
+  { label: "Normal 12", color: "var(--ok)" },
+  { label: "Suspicious 3", color: "var(--warn)" },
+  { label: "Compromised 1", color: "var(--critical)" },
+  { label: "Offline 2", color: "var(--isolated)" },
 ];
 
 const SERVER = "M-14 -11 H14 V11 H-14 Z M-7 -4 H7 V6 H-7 Z";
@@ -191,7 +191,7 @@ export function NetworkHeroSection() {
               ))}
               {HOSTS.map((host, index) => (
                 <line
-                  key={`traffic-${host.x}`}
+                  key={`traffic-${index}`}
                   className="traffic"
                   x1={CENTER.x}
                   y1={CENTER.y}

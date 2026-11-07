@@ -4,6 +4,7 @@ import { gsap } from "gsap";
 import { HttpStatusError, readJson } from "../api";
 import { useApp } from "../store";
 import { useReducedMotion } from "../useReducedMotion";
+import { SYSTEM_NAME } from "../brand";
 
 export function Login() {
   const reduced = useReducedMotion();
@@ -13,6 +14,7 @@ export function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [failed, setFailed] = useState(false);
+  const [blocked, setBlocked] = useState(false);
   const [hint, setHint] = useState(false);
 
   useLayoutEffect(() => {
@@ -32,6 +34,7 @@ export function Login() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     setFailed(false);
+    setBlocked(false);
     try {
       const body = await readJson<{ username: string; role: string }>("/api/login", {
         method: "POST",
@@ -43,6 +46,9 @@ export function Login() {
       if (error instanceof HttpStatusError && error.status === 401) {
         setFailed(true);
       }
+      if (error instanceof HttpStatusError && error.status === 429) {
+        setBlocked(true);
+      }
     }
   }
 
@@ -50,12 +56,12 @@ export function Login() {
     <main className="access" ref={root}>
       <section className="access-card">
         <div className="access-visual">
-          <p className="access-brand">Field station</p>
+          <p className="access-brand">{SYSTEM_NAME}</p>
           <div className="access-visual-copy">
             <h1>Welcome back.</h1>
             <p>Secure access to the network topology, incident planner, and response engine.</p>
           </div>
-          <p className="access-line">System status: Operational // AES-256 enabled</p>
+          <p className="access-line">System status: Operational // Role-gated session</p>
         </div>
         <form className="access-form" onSubmit={submit}>
           <p className="access-kicker">Authenticate</p>
@@ -65,6 +71,7 @@ export function Login() {
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               autoComplete="username"
+              autoFocus
             />
           </label>
           <label className="pass">
@@ -77,6 +84,7 @@ export function Login() {
             />
           </label>
           {failed ? <p className="access-fail" role="alert">Sign in failed.</p> : null}
+          {blocked ? <p className="access-fail" role="alert">Too many attempts. Wait a few minutes.</p> : null}
           <button type="submit">Initialize session</button>
           <button type="button" className="access-forgot" onClick={() => setHint(true)}>
             Forgot password?

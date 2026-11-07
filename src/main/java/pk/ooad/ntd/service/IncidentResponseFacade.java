@@ -24,6 +24,7 @@ import pk.ooad.ntd.response.BackbonePlanner;
 import pk.ooad.ntd.simulation.TrafficSimulator;
 import pk.ooad.ntd.util.ConfigManager;
 
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -52,14 +53,22 @@ public class IncidentResponseFacade {
     }
 
     public IncidentResponseFacade(Network network, long seed) {
-        this(network, seed, List.of(), null);
+        this(network, Clock.systemUTC(), seed, List.of(), null);
+    }
+
+    public IncidentResponseFacade(Network network, Clock clock, long seed) {
+        this(network, clock, seed, List.of(), null);
     }
 
     IncidentResponseFacade(Network network, long seed, List<MitigationTask> tasks, List<AnalystTeam> teams) {
+        this(network, Clock.systemUTC(), seed, tasks, teams);
+    }
+
+    IncidentResponseFacade(Network network, Clock clock, long seed, List<MitigationTask> tasks, List<AnalystTeam> teams) {
         this.network = Objects.requireNonNull(network, "network must not be null");
         responseTasks = tasks == null ? List.of() : List.copyOf(tasks);
         responseTeams = teams == null ? null : List.copyOf(teams);
-        trafficSimulator = new TrafficSimulator(network, seed);
+        trafficSimulator = new TrafficSimulator(network, clock, seed);
         alertBus = new AlertBus();
         detectionEngine = new DetectionEngine(trafficSimulator.getEventQueue(), alertBus,
                 ConfigManager.getInstance().getInt("detection.cooldownSeconds", 5));

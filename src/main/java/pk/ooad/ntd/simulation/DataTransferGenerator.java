@@ -8,8 +8,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Random;
+import pk.ooad.ntd.util.ConfigManager;
 
 public class DataTransferGenerator extends AttackGenerator {
+    private final int count = ConfigManager.getInstance().getInt("sim.exfil.chunks", 5);
+    private final int port = ConfigManager.getInstance().getInt("sim.exfil.port", 443);
+    private final int baseBytes = ConfigManager.getInstance().getInt("sim.exfil.baseBytes", 1_000_000);
+    private final int jitterBytes = ConfigManager.getInstance().getInt("sim.exfil.jitterBytes", 500_000);
 
     @Override
     public List<NetworkEvent> generate(String src, String dst, Instant now, Random rnd) {
@@ -17,11 +22,9 @@ public class DataTransferGenerator extends AttackGenerator {
         Objects.requireNonNull(rnd, "rnd must not be null");
 
         List<NetworkEvent> events = new ArrayList<>();
-        int count = 5;
-        int port = 443;
 
         for (long id = 1; id <= count; id++) {
-            long bytes = 1_000_000L + rnd.nextInt(500_000);
+            long bytes = baseBytes + rnd.nextInt(Math.max(1, jitterBytes));
             events.add(new NetworkEvent(
                 id,
                 now.plusSeconds(id - 1),

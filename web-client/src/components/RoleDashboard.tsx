@@ -53,13 +53,6 @@ function profile(role: string, assets: Asset[], alerts: FeedAlert[], alertCount:
   };
 }
 
-function greeting(name: string): string {
-  const hour = new Date().getHours();
-  const part = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-  const label = name ? name.charAt(0).toUpperCase() + name.slice(1) : "operator";
-  return `${part}, ${label}`;
-}
-
 function weekCounts(alerts: FeedAlert[]): number[] {
   const counts = [0, 0, 0, 0, 0, 0, 0];
   for (const alert of alerts) {
@@ -69,13 +62,6 @@ function weekCounts(alerts: FeedAlert[]): number[] {
     counts[day === 0 ? 6 : day - 1] += 1;
   }
   return counts;
-}
-
-function tone(severity: string): string {
-  const value = severity.toUpperCase();
-  if (value.includes("CRIT") || value === "HIGH") return "hot";
-  if (value.includes("WARN") || value === "MEDIUM" || value.includes("SUSPIC")) return "warn";
-  return "ok";
 }
 
 function smoothPath(points: { x: number; y: number }[]): string {
@@ -152,36 +138,6 @@ function eventName(type: string): string {
   return attackLabel(type);
 }
 
-function RhythmChart({ bars, line }: { bars: number[]; line: number[] }) {
-  const width = 520;
-  const height = 160;
-  const peak = Math.max(1, ...bars, ...line);
-  const gap = width / bars.length;
-  const step = bars.length > 1 ? width / (bars.length - 1) : width;
-  const linePoints = line.map((value, index) => {
-    const x = index * step;
-    const y = height - 16 - (value / peak) * (height - 36);
-    return `${x},${y}`;
-  }).join(" ");
-  return (
-    <svg className="dash-rhythm" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Weekly rhythm">
-      {bars.map((value, index) => {
-        const barHeight = (value / peak) * (height - 36);
-        return (
-          <rect
-            key={DAYS[index]}
-            x={index * gap + gap * 0.28}
-            y={height - 16 - barHeight}
-            width={gap * 0.44}
-            height={Math.max(2, barHeight)}
-          />
-        );
-      })}
-      <polyline points={linePoints} />
-    </svg>
-  );
-}
-
 function monthWeeks(alerts: FeedAlert[]): number[] {
   const now = new Date();
   const counts = [0, 0, 0, 0, 0];
@@ -203,55 +159,6 @@ function vectorCounts(alerts: FeedAlert[]): { label: string; value: number }[] {
   return [...counts.entries()].map(([label, value]) => ({ label, value }));
 }
 
-function heatCells(alerts: FeedAlert[]): number[] {
-  const cells = Array.from({ length: 7 * 12 }, () => 0);
-  alerts.forEach((alert, index) => {
-    let hash = index + 1;
-    for (const char of alert.id) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;
-    cells[hash % cells.length] += 1;
-  });
-  return cells;
-}
-
-function heatColor(value: number, peak: number): string {
-  if (value <= 0 || peak <= 0) return "#1A2E22";
-  const ratio = value / peak;
-  if (ratio > 0.75) return "#D9A05B";
-  if (ratio > 0.45) return "#8C6A3A";
-  if (ratio > 0.2) return "#3D4A32";
-  return "#243528";
-}
-
-function Rings({ values }: { values: { label: string; value: number }[] }) {
-  return (
-    <div className="dash-rings">
-      {values.map((item) => {
-        const radius = 28;
-        const circ = 2 * Math.PI * radius;
-        const dash = (Math.max(0, Math.min(100, item.value)) / 100) * circ;
-        return (
-          <div key={item.label} className="dash-ring">
-            <svg viewBox="0 0 72 72" aria-hidden="true">
-              <circle cx="36" cy="36" r={radius} />
-              <circle cx="36" cy="36" r={radius} strokeDasharray={`${dash} ${circ}`} />
-            </svg>
-            <div>
-              <p>{item.value}%</p>
-              <span>{item.label}</span>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function gauge(id: string, salt: number): number {
-  let hash = salt;
-  for (const char of id) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;
-  return 18 + (hash % 62);
-}
-
 export function RoleDashboard({
   role,
   username,
@@ -259,8 +166,6 @@ export function RoleDashboard({
   alerts,
   alertCount,
   disconnected,
-  running,
-  incidentCount,
 }: {
   role: string;
   username: string;
@@ -268,8 +173,6 @@ export function RoleDashboard({
   alerts: FeedAlert[];
   alertCount: number;
   disconnected: boolean;
-  running: boolean;
-  incidentCount: number;
 }) {
   const [range, setRange] = useState<"week" | "month">("week");
   const copy = profile(role, assets, alerts, alertCount);
@@ -320,7 +223,7 @@ export function RoleDashboard({
                     const alert = group.latest;
                     const when = new Date(alert.timestamp);
                     const clock = Number.isNaN(when.getTime()) ? alert.timestamp : when.toLocaleTimeString();
-                    const simulation = alert.id.startsWith("sim-") || alert.detectorName === "Field station";
+                    const simulation = alert.simulated ?? alert.id.startsWith("sim-");
                     return (
                       <tr key={alert.id}>
                         <td><StatusBadge status={alert.severity} /></td>
@@ -344,7 +247,7 @@ export function RoleDashboard({
             <span className="card-titles"><h2>{copy.kpiLabel}</h2></span>
             {earlier > 0 ? <span className="delta-chip">{recent} today</span> : null}
           </header>
-          <p className="stat-value">{copy.kpiValue}</p>
+          <p className="stat-value is-accent">{copy.kpiValue}</p>
           {week.some((value) => value > 0) ? <SmoothChart values={week} labels={DAYS} /> : <p className="dash-empty">{emptyCopy}</p>}
         </section>
       </div>

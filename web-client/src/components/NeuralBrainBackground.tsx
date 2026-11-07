@@ -1,6 +1,7 @@
-import { useRef } from "react";
+﻿import { useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import type { Mesh } from "three";
+import { cssToken } from "../theme";
 
 function TorusKnot() {
   const meshRef = useRef<Mesh>(null);
@@ -15,7 +16,7 @@ function TorusKnot() {
   return (
     <mesh ref={meshRef}>
       <torusKnotGeometry args={[2.5, 0.6, 128, 64, 2, 3]} />
-      <meshBasicMaterial color="#D9A05B" wireframe transparent opacity={0.1} />
+      <meshBasicMaterial color={cssToken("--accent-gold", "#D9A05B")} wireframe transparent opacity={0.12} />
     </mesh>
   );
 }

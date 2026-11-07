@@ -95,7 +95,7 @@ export function ReportsPage() {
       <div className="stat-row">
         <article className="stat-tile"><strong className="stat-value">{incidents.length}</strong><span>Total incidents</span></article>
         <article className="stat-tile"><strong className="stat-value">{openCount}</strong><span>Open</span></article>
-        <article className="stat-tile"><strong>{highest.label ? <StatusBadge status={highest.label} /> : "—"}</strong><span>Highest severity</span></article>
+        <article className="stat-tile"><strong>{highest.label ? <StatusBadge status={highest.label} /> : "-"}</strong><span>Highest severity</span></article>
         <article className="stat-tile"><strong className="stat-value">{hosts}</strong><span>Hosts affected</span></article>
       </div>
       <div className="plan-grid report-section">
@@ -138,11 +138,11 @@ export function ReportsPage() {
                   const host = hostFor(row.sourceIp);
                   return (
                     <tr key={row.id} onClick={() => setOpen(row)}>
-                      <td>{severityOf(row) ? <StatusBadge status={severityOf(row)} /> : "—"}</td>
-                      <td>{host?.name ?? "—"}<br /><span className="mono muted">{row.sourceIp}</span></td>
+                      <td>{severityOf(row) ? <StatusBadge status={severityOf(row)} /> : "-"}</td>
+                      <td>{host?.name ?? "-"}<br /><span className="mono muted">{row.sourceIp}</span></td>
                       <td><StatusBadge status={row.status} /></td>
                       <td className="mono">{row.alerts.length}</td>
-                      <td className="mono" title={row.openedAt}>{row.openedAt ? relativeTime(row.openedAt) : "—"}</td>
+                      <td className="mono" title={row.openedAt}>{row.openedAt ? relativeTime(row.openedAt) : "-"}</td>
                     </tr>
                   );
                 })}
@@ -156,7 +156,7 @@ export function ReportsPage() {
           {open ? (
             <Panel title={hostFor(open.sourceIp)?.name ?? "Incident"} subtitle={`${open.alerts.length} alerts`}>
               <p><StatusBadge status={open.status} /></p>
-              <p className="mono" title={open.id}>{open.openedAt || "—"}</p>
+              <p className="mono" title={open.id}>{open.openedAt || "-"}</p>
               <button type="button" className="secondary" onClick={() => { const host = hostFor(open.sourceIp); if (host) { setSelectedId(host.id); navigate("/portal"); } }}>Show on map</button>
             </Panel>
           ) : null}
@@ -165,7 +165,7 @@ export function ReportsPage() {
           {raw ? (
             <>
               <button type="button" onClick={() => navigator.clipboard.writeText(report)}>Copy</button>
-              <pre className="report">{report || "—"}</pre>
+              <pre className="report">{report || "-"}</pre>
             </>
           ) : <p className="muted">The server text stays collapsed.</p>}
         </Panel>

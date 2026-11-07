@@ -2,9 +2,12 @@ package pk.ooad.ntd.web;
 
 import io.javalin.Javalin;
 import io.javalin.http.Context;
+import io.javalin.http.ForbiddenResponse;
 import io.javalin.http.staticfiles.Location;
+import org.eclipse.jetty.http.HttpCookie;
 import org.eclipse.jetty.server.session.SessionHandler;
 import pk.ooad.ntd.service.IncidentResponseFacade;
+import pk.ooad.ntd.util.ConfigManager;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,18 +37,66 @@ public class WebServer {
         if (app != null) {
             return;
         }
-        app = Javalin.create(config -> {
-            config.showJavalinBanner = false;
-            config.jetty.modifyServletContextHandler(handler -> handler.setSessionHandler(new SessionHandler()));
+        ConfigManager config = ConfigManager.getInstance();
+        boolean secureCookie = Boolean.parseBoolean(config.getString("auth.session.secureCookie", "false"));
+        int timeoutSeconds = Math.max(60, config.getInt("auth.session.timeoutSeconds", 28800));
+        int cookieMaxAge = config.getInt("auth.session.maxAgeSeconds", 0);
+        app = Javalin.create(javalin -> {
+            javalin.showJavalinBanner = false;
+            javalin.jetty.modifyServletContextHandler(handler -> {
+                SessionHandler sessionHandler = new SessionHandler();
+                sessionHandler.setMaxInactiveInterval(timeoutSeconds);
+                sessionHandler.getSessionCookieConfig().setHttpOnly(true);
+                sessionHandler.getSessionCookieConfig().setSecure(secureCookie);
+                if (cookieMaxAge > 0) {
+                    sessionHandler.getSessionCookieConfig().setMaxAge(cookieMaxAge);
+                }
+                sessionHandler.setSameSite(HttpCookie.SameSite.LAX);
+                handler.setSessionHandler(sessionHandler);
+            });
             if (classpathWebPresent()) {
-                config.staticFiles.add(staticFiles -> {
+                javalin.staticFiles.add(staticFiles -> {
                     staticFiles.hostedPath = "/";
                     staticFiles.directory = "/web";
                     staticFiles.location = Location.CLASSPATH;
                     staticFiles.headers = Map.of("Cache-Control", "no-store");
                 });
                 if (WebServer.class.getResource("/web/index.html") != null) {
-                    config.spaRoot.addHandler("/", WebServer::fallbackToIndex);
+                    javalin.spaRoot.addHandler("/", WebServer::fallbackToIndex);
+                }
+            }
+        });
+        app.before(ctx -> {
+            ctx.header("X-Content-Type-Options", "nosniff");
+            ctx.header("X-Frame-Options", "DENY");
+            ctx.header("Referrer-Policy", "strict-origin-when-cross-origin");
+            ctx.header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self';");
+
+            String method = ctx.method().name();
+            if (!method.equals("GET") && !method.equals("HEAD") && !method.equals("OPTIONS")) {
+                String origin = ctx.header("Origin");
+                if (origin != null && !origin.isBlank()) {
+                    try {
+                        java.net.URI originUri = java.net.URI.create(origin);
+                        String originHost = originUri.getHost();
+                        int originPort = originUri.getPort();
+                        String reqHost = ctx.host();
+                        String hostName = reqHost.contains(":") ? reqHost.substring(0, reqHost.indexOf(':')) : reqHost;
+                        int hostPort = reqHost.contains(":") ? Integer.parseInt(reqHost.substring(reqHost.indexOf(':') + 1)) : 80;
+
+                        boolean hostMatches = originHost != null && (originHost.equalsIgnoreCase(hostName)
+                                || (originHost.equalsIgnoreCase("localhost") && hostName.equalsIgnoreCase("127.0.0.1"))
+                                || (originHost.equalsIgnoreCase("127.0.0.1") && hostName.equalsIgnoreCase("localhost")));
+                        boolean portMatches = originPort == -1 || originPort == hostPort || (originPort == 80 && hostPort == -1);
+
+                        if (!hostMatches || !portMatches) {
+                            throw new ForbiddenResponse("Forbidden: cross-origin state change rejected");
+                        }
+                    } catch (ForbiddenResponse fr) {
+                        throw fr;
+                    } catch (Exception ex) {
+                        throw new ForbiddenResponse("Forbidden: invalid origin");
+                    }
                 }
             }
         });

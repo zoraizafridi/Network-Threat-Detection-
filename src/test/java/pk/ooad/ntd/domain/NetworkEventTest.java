@@ -87,7 +87,8 @@ class NetworkEventTest {
             "bytes",
             "type",
             "success",
-            "payload"
+            "payload",
+            "simulated"
         );
 
         assertEquals(expectedFields, fieldNames, "Declared fields must match the spec exactly");
@@ -98,6 +99,19 @@ class NetworkEventTest {
                 "NetworkEvent must not have any malicious field or label: " + name
             );
         }
+    }
+
+    @Test
+    @DisplayName("Provenance: the simulated tag defaults to false and is never a malicious label")
+    void testSimulatedProvenance() {
+        NetworkEvent plain = new NetworkEvent(1L, Instant.EPOCH, "10.0.0.1", "10.0.0.2", 80, 8L,
+            EventType.REQUEST, true, "hello");
+        assertFalse(plain.simulated());
+
+        NetworkEvent injected = new NetworkEvent(1L, Instant.EPOCH, "10.0.0.1", "10.0.0.2", 80, 8L,
+            EventType.REQUEST, true, "hello", true);
+        assertTrue(injected.simulated());
+        assertNotEquals(plain, injected);
     }
 
     @Test

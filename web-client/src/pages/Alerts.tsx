@@ -1,11 +1,10 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { filterAlerts } from "../alerts";
-import { attackLabel } from "../format";
+import { attackLabel, clockTime } from "../format";
 import { EmptyState, MapPanel, Page, Panel, StatusBadge } from "../components/ui";
 import { NetworkMap } from "../components/NetworkMap";
 import { useApp } from "../store";
-import type { Asset } from "../types";
 
 export function AlertsPage() {
   const alerts = useApp((state) => state.alerts);
@@ -63,7 +62,7 @@ export function AlertsPage() {
             <tbody>
               {rows.map((alert) => (
                 <tr key={alert.id} onClick={() => focus(alert.targetIp)}>
-                  <td>{alert.timestamp}</td>
+                  <td className="mono" title={alert.timestamp}>{clockTime(alert.timestamp)}</td>
                   <td><StatusBadge status={alert.severity} /></td>
                   <td>{attackLabel(alert.attackType)}</td>
                   <td>{alert.sourceIp}</td>

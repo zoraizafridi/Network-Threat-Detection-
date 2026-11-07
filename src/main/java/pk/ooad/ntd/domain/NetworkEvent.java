@@ -11,7 +11,12 @@ public record NetworkEvent(
     long bytes,
     EventType type,
     boolean success,
-    String payload
+    String payload,
+    boolean simulated
 ) {
+    public NetworkEvent(long id, Instant timestamp, String sourceIp, String destIp, int port,
+                        long bytes, EventType type, boolean success, String payload) {
+        this(id, timestamp, sourceIp, destIp, port, bytes, type, success, payload, false);
+    }
 }
 

@@ -136,7 +136,7 @@ function publish(alertType: string, stage: number, sourceId: string, targetId: s
     attackType: alertType,
     sourceIp: source.ip,
     targetIp: target.ip,
-    detectorName: "Field station",
+    detectorName: "ScenarioSimulator",
     description: STAGE_NAMES[stage] ?? alertType,
   });
   void request("/api/attacks", {

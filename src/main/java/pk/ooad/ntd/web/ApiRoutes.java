@@ -20,8 +20,13 @@ import pk.ooad.ntd.domain.User;
 import pk.ooad.ntd.domain.Viewer;
 import pk.ooad.ntd.service.Incident;
 import pk.ooad.ntd.service.IncidentResponseFacade;
+import pk.ooad.ntd.util.ConfigManager;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,23 +35,46 @@ import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class ApiRoutes {
-    private static final int ALERT_BUFFER = 500;
+    private static final Set<String> API_PATHS = Set.of(
+            "/api/login", "/api/logout", "/api/state", "/api/network",
+            "/api/sim/start", "/api/sim/stop", "/api/sim/reset", "/api/sim/auto",
+            "/api/attacks", "/api/alerts", "/api/incidents", "/api/response/run",
+            "/api/report", "/api/config", "/api/stream");
+    private static final String CSRF_COOKIE = "csrf";
+    private static final String CSRF_HEADER = "X-CSRF-Token";
+    private static final String JSON_TYPE = "application/json";
 
     private final IncidentResponseFacade facade;
     private final StreamBroadcaster broadcaster;
     private final ReentrantLock lock;
     private final ObjectMapper mapper = new ObjectMapper();
+    private final ConfigManager config = ConfigManager.getInstance();
+    private final LoginThrottle loginThrottle = new LoginThrottle();
+    private final SecureRandom random = new SecureRandom();
+    private final int alertBuffer;
+    private final boolean csrfEnabled;
+    private final int sessionMaxAgeSeconds;
+    private final boolean secureCookie;
 
     public ApiRoutes(IncidentResponseFacade facade, StreamBroadcaster broadcaster, ReentrantLock lock) {
         this.facade = facade;
         this.broadcaster = broadcaster;
         this.lock = lock;
-        broadcaster.setEncoders(this::alertJson, this::networkJson, this::stateJson);
+        this.alertBuffer = Math.max(1, config.getInt("alerts.buffer.max", 500));
+        this.csrfEnabled = Boolean.parseBoolean(config.getString("auth.csrf.enabled", "true"));
+        this.sessionMaxAgeSeconds = Math.max(60, config.getInt("auth.session.timeoutSeconds", 28800));
+        this.secureCookie = Boolean.parseBoolean(config.getString("auth.session.secureCookie", "false"));
+        broadcaster.setEncoders(this::alertJson, this::networkJson, this::stateJson, this::incidentsJson);
     }
 
     public void register(Javalin app) {
         app.before(ctx -> {
             if (!ctx.path().startsWith("/api")) {
+                return;
+            }
+            if (!API_PATHS.contains(ctx.path())) {
+                ctx.status(404).result("");
+                ctx.skipRemainingHandlers();
                 return;
             }
             if ("/api/login".equals(ctx.path()) && ctx.method() == HandlerType.POST) {
@@ -55,6 +83,10 @@ public class ApiRoutes {
             if (ctx.sessionAttribute("username") == null) {
                 ctx.status(401).result("");
                 ctx.skipRemainingHandlers();
+                return;
+            }
+            if (csrfEnabled && requiresCsrfToken(ctx)) {
+                enforceCsrf(ctx);
             }
         });
 
@@ -62,6 +94,7 @@ public class ApiRoutes {
         app.post("/api/logout", this::logout);
         app.get("/api/state", this::state);
         app.get("/api/network", this::network);
+        app.get("/api/config", this::configuration);
         app.post("/api/sim/start", ctx -> simControl(ctx, () -> facade.start(), false));
         app.post("/api/sim/stop", ctx -> simControl(ctx, () -> facade.stop(), false));
         app.post("/api/sim/reset", ctx -> simControl(ctx, () -> facade.reset(), true));
@@ -79,6 +112,9 @@ public class ApiRoutes {
     }
 
     private void login(Context ctx) {
+        if (rejectsContentType(ctx)) {
+            return;
+        }
         JsonNode body = readJson(ctx);
         if (body == null) {
             ctx.status(400);
@@ -86,21 +122,30 @@ public class ApiRoutes {
         }
         String username = text(body, "username");
         String password = text(body, "password");
+        String throttleKey = username + "|" + ctx.ip();
+        if (!loginThrottle.allowed(throttleKey)) {
+            ctx.header("Retry-After", String.valueOf(loginThrottle.retryAfterSeconds(throttleKey)));
+            ctx.status(429).result("");
+            return;
+        }
         User user;
         lock.lock();
         try {
             user = facade.login(username, password);
         } catch (IllegalArgumentException ex) {
+            loginThrottle.recordFailure(throttleKey);
             ctx.status(401).result("");
             return;
         } finally {
             lock.unlock();
         }
+        loginThrottle.clear(throttleKey);
         String role = roleName(user);
         ctx.sessionAttribute("username", user.getUsername());
         ctx.sessionAttribute("role", role);
         ctx.sessionAttribute("canLaunchAttack", user.canLaunchAttack());
         ctx.sessionAttribute("canRunPlanner", user.canRunPlanner());
+        setCsrfCookie(ctx);
         ctx.json(Map.of("username", user.getUsername(), "role", role));
     }
 
@@ -112,6 +157,9 @@ public class ApiRoutes {
     }
 
     private void state(Context ctx) {
+        if (csrfEnabled && ctx.cookie(CSRF_COOKIE) == null) {
+            setCsrfCookie(ctx);
+        }
         ctx.json(buildState(ctx.sessionAttribute("username"), ctx.sessionAttribute("role")));
     }
 
@@ -122,6 +170,9 @@ public class ApiRoutes {
     private void auto(Context ctx) {
         if (!canControlSim(ctx)) {
             ctx.status(403).result("");
+            return;
+        }
+        if (rejectsContentType(ctx)) {
             return;
         }
         JsonNode body = readJson(ctx);
@@ -137,12 +188,16 @@ public class ApiRoutes {
             lock.unlock();
         }
         broadcaster.broadcastState();
+        broadcaster.broadcastIncidents();
         ctx.status(200).result("");
     }
 
     private void attack(Context ctx) {
         if (!Boolean.TRUE.equals(ctx.sessionAttribute("canLaunchAttack"))) {
             ctx.status(403).result("");
+            return;
+        }
+        if (rejectsContentType(ctx)) {
             return;
         }
         JsonNode body = readJson(ctx);
@@ -164,7 +219,7 @@ public class ApiRoutes {
             Network network = facade.getNetwork();
             NetworkAsset src = network.getAsset(srcId);
             NetworkAsset dst = network.getAsset(dstId);
-            if (src == null || dst == null) {
+            if (src == null || dst == null || srcId.equals(dstId) || src.getIp().equals(dst.getIp())) {
                 ctx.status(400);
                 return;
             }
@@ -177,7 +232,7 @@ public class ApiRoutes {
 
     private void alerts(Context ctx) {
         String raw = ctx.queryParam("limit");
-        int limit = ALERT_BUFFER;
+        int limit = alertBuffer;
         if (raw != null) {
             try {
                 limit = Integer.parseInt(raw);
@@ -187,10 +242,11 @@ public class ApiRoutes {
             }
         }
         if (limit < 0) {
-            limit = 0;
+            ctx.status(400);
+            return;
         }
-        if (limit > ALERT_BUFFER) {
-            limit = ALERT_BUFFER;
+        if (limit > alertBuffer) {
+            limit = alertBuffer;
         }
         List<Dtos.AlertDto> alerts = new ArrayList<>();
         for (Alert alert : broadcaster.getRecentAlerts(limit)) {
@@ -204,16 +260,7 @@ public class ApiRoutes {
         lock.lock();
         try {
             for (Incident incident : facade.getIncidents()) {
-                List<Dtos.AlertDto> alerts = new ArrayList<>();
-                for (Alert alert : incident.getAlerts()) {
-                    alerts.add(alertDto(alert));
-                }
-                rows.add(new Dtos.IncidentDto(
-                        incident.getId(),
-                        incident.getSourceIp(),
-                        incident.getStatus().name(),
-                        incident.getOpenedAt().toString(),
-                        alerts));
+                rows.add(incidentDto(incident));
             }
         } finally {
             lock.unlock();
@@ -224,6 +271,9 @@ public class ApiRoutes {
     private void response(Context ctx) {
         if (!Boolean.TRUE.equals(ctx.sessionAttribute("canRunPlanner"))) {
             ctx.status(403).result("");
+            return;
+        }
+        if (rejectsContentType(ctx)) {
             return;
         }
         Set<String> excludedHosts = new LinkedHashSet<>();
@@ -368,10 +418,12 @@ public class ApiRoutes {
         } finally {
             lock.unlock();
         }
-        broadcaster.broadcastState();
         if (reset) {
+            broadcaster.clearRecentAlerts();
             broadcaster.requestNetwork();
         }
+        broadcaster.broadcastState();
+        broadcaster.broadcastIncidents();
         ctx.status(200).result("");
     }
 
@@ -425,7 +477,7 @@ public class ApiRoutes {
     private Dtos.StateDto buildState(String username, String role) {
         boolean running;
         boolean autoMode;
-        int alertCount = 0;
+        int alertCount;
         int incidentCount;
         lock.lock();
         try {
@@ -433,9 +485,7 @@ public class ApiRoutes {
             autoMode = facade.isAutoMode();
             List<Incident> incidents = facade.getIncidents();
             incidentCount = incidents.size();
-            for (Incident incident : incidents) {
-                alertCount += incident.getAlerts().size();
-            }
+            alertCount = broadcaster.getAlertCount();
         } finally {
             lock.unlock();
         }
@@ -461,6 +511,31 @@ public class ApiRoutes {
         }
     }
 
+    private String incidentsJson() {
+        try {
+            List<Dtos.IncidentDto> rows = new ArrayList<>();
+            for (Incident incident : facade.getIncidents()) {
+                rows.add(incidentDto(incident));
+            }
+            return mapper.writeValueAsString(rows);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private Dtos.IncidentDto incidentDto(Incident incident) {
+        List<Dtos.AlertDto> alerts = new ArrayList<>();
+        for (Alert alert : incident.getAlerts()) {
+            alerts.add(alertDto(alert));
+        }
+        return new Dtos.IncidentDto(
+                incident.getId(),
+                incident.getSourceIp(),
+                incident.getStatus().name(),
+                incident.getOpenedAt() == null ? "" : incident.getOpenedAt().toString(),
+                alerts);
+    }
+
     private String alertJson(Alert alert) {
         try {
             return mapper.writeValueAsString(alertDto(alert));
@@ -478,7 +553,88 @@ public class ApiRoutes {
                 alert.getSourceIp(),
                 alert.getTargetIp(),
                 alert.getDetectorName(),
-                alert.getDescription());
+                alert.getDescription(),
+                alert.isSimulated());
+    }
+
+    private boolean requiresCsrfToken(Context ctx) {
+        HandlerType method = ctx.method();
+        return method != HandlerType.GET && method != HandlerType.HEAD && method != HandlerType.OPTIONS;
+    }
+
+    private void enforceCsrf(Context ctx) {
+        String cookie = ctx.cookie(CSRF_COOKIE);
+        String header = ctx.header(CSRF_HEADER);
+        if (cookie == null || header == null || !MessageDigest.isEqual(
+                cookie.getBytes(StandardCharsets.UTF_8), header.getBytes(StandardCharsets.UTF_8))) {
+            ctx.status(403).result("");
+            ctx.skipRemainingHandlers();
+        }
+    }
+
+    private void setCsrfCookie(Context ctx) {
+        byte[] token = new byte[32];
+        random.nextBytes(token);
+        String value = Base64.getUrlEncoder().withoutPadding().encodeToString(token);
+        String cookie = CSRF_COOKIE + "=" + value
+                + "; Path=/; Max-Age=" + sessionMaxAgeSeconds + "; SameSite=Strict";
+        if (secureCookie) {
+            cookie += "; Secure";
+        }
+        ctx.res().addHeader("Set-Cookie", cookie);
+    }
+
+    private boolean rejectsContentType(Context ctx) {
+        String raw = ctx.body();
+        if (raw == null || raw.isBlank()) {
+            return false;
+        }
+        String type = ctx.contentType();
+        if (type == null || type.isBlank()) {
+            return false;
+        }
+        if (!type.toLowerCase().contains(JSON_TYPE)) {
+            ctx.status(415).result("");
+            return true;
+        }
+        return false;
+    }
+
+    private void configuration(Context ctx) {
+        if (!"Admin".equals(ctx.sessionAttribute("role"))) {
+            ctx.status(403).result("");
+            return;
+        }
+        Map<String, Object> thresholds = new LinkedHashMap<>();
+        for (String key : List.of(
+                "risk.cap", "risk.compromiseThreshold", "incident.correlationWindowSeconds",
+                "detection.cooldownSeconds", "detection.rate.windowSeconds", "detection.rate.maxFailures",
+                "detection.portScan.windowSeconds", "detection.portScan.maxDistinctPorts",
+                "detection.portScan.maxDistinctHosts", "detection.anomaly.zThreshold",
+                "detection.anomaly.warmupCount", "alerts.buffer.max", "stream.network.intervalMillis")) {
+            thresholds.put(key, config.getString(key, ""));
+        }
+        Map<String, Object> session = new LinkedHashMap<>();
+        session.put("timeoutSeconds", sessionMaxAgeSeconds);
+        session.put("csrfEnabled", csrfEnabled);
+        session.put("loginMaxAttempts", loginThrottle.getMaxAttempts());
+        session.put("loginWindowSeconds", loginThrottle.getWindowSeconds());
+        List<Map<String, String>> accounts = new ArrayList<>();
+        accounts.add(account("auth.defaultUsername", "Admin"));
+        accounts.add(account("auth.analystUsername", "Analyst"));
+        accounts.add(account("auth.viewerUsername", "Viewer"));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("thresholds", thresholds);
+        body.put("session", session);
+        body.put("accounts", accounts);
+        ctx.json(body);
+    }
+
+    private Map<String, String> account(String key, String role) {
+        Map<String, String> row = new LinkedHashMap<>();
+        row.put("username", config.getString(key, ""));
+        row.put("role", role);
+        return row;
     }
 
     private JsonNode readJson(Context ctx) {

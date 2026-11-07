@@ -63,19 +63,19 @@ public class TrafficSimulator {
     }
 
     public TrafficSimulator(Network network, Random random) {
-        this(network, Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC), random, new LinkedBlockingQueue<>());
+        this(network, Clock.systemUTC(), random, new LinkedBlockingQueue<>());
     }
 
     public TrafficSimulator(Network network, long seed) {
-        this(network, Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC), new Random(seed), new LinkedBlockingQueue<>());
+        this(network, Clock.systemUTC(), new Random(seed), new LinkedBlockingQueue<>());
     }
 
     public TrafficSimulator(long seed) {
-        this(null, Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC), new Random(seed), new LinkedBlockingQueue<>());
+        this(null, Clock.systemUTC(), new Random(seed), new LinkedBlockingQueue<>());
     }
 
     public TrafficSimulator() {
-        this(null, Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC), new Random(0L), new LinkedBlockingQueue<>());
+        this(null, Clock.systemUTC(), new Random(0L), new LinkedBlockingQueue<>());
     }
 
     public synchronized void start() {
@@ -127,7 +127,8 @@ public class TrafficSimulator {
                     raw.bytes(),
                     raw.type(),
                     raw.success(),
-                    raw.payload()
+                    raw.payload(),
+                    true
                 );
                 queue.offer(event);
             }

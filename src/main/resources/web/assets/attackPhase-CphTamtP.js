@@ -1,0 +1,1 @@
+var e={active:!1,phase:`idle`,sourceId:null,targetId:null,token:0},t=new Set,n=e;function r(){t.forEach(e=>e())}function i(){(n.active||n.phase!==`idle`||n.sourceId!==null||n.targetId!==null)&&(n={active:!1,phase:`idle`,sourceId:null,targetId:null,token:n.token},r())}export{i as t};

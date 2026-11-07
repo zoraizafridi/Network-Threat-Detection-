@@ -68,8 +68,8 @@ function RiskChart({ values }: { values: number[] }) {
     })
     .join(" ");
   return (
-    <svg width={width} height={height} role="img" aria-label="Risk history">
-      <polyline points={points} fill="none" stroke="#1f3d2b" strokeWidth="1.5" />
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Risk history" className="spark">
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" />
     </svg>
   );
 }

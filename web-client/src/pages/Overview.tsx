@@ -5,7 +5,7 @@ import { NetworkStage } from "../components/NetworkMap";
 import { RoleDashboard } from "../components/RoleDashboard";
 import { canLaunchAttack } from "../permissions";
 import { getScenario, scenarioPause, scenarioReplay, scenarioResume, scenarioSpeed, scenarioStep, STAGE_NAMES, subscribeScenario } from "../scenario";
-import { attackLabel, relativeTime } from "../format";
+import { attackLabel, clockTime } from "../format";
 import { EmptyState, MapPanel, Panel, sentence, StatusBadge } from "../components/ui";
 import { useApp } from "../store";
 import type { Asset } from "../types";
@@ -57,7 +57,7 @@ export function Overview() {
       { x: -24, autoAlpha: 0 },
       { x: 0, autoAlpha: 1, duration: 0.45, ease: "power3.out" },
     );
-    return () => tween.kill();
+    return () => { tween.kill(); };
   }, [freshId, reduced]);
 
   function choose(id: string) {
@@ -166,8 +166,7 @@ export function Overview() {
                   const device = assets.find((asset) => asset.ip === row.targetIp) ?? assets.find((asset) => asset.ip === row.sourceIp);
                   const source = assets.find((asset) => asset.ip === row.sourceIp);
                   const target = assets.find((asset) => asset.ip === row.targetIp);
-                  const when = new Date(row.timestamp);
-                  const clock = Number.isNaN(when.getTime()) ? row.timestamp : when.toLocaleTimeString();
+                  const clock = clockTime(row.timestamp);
                   return (
                     <button key={row.id} type="button" className="alert-row" data-fresh={row.id === freshId ? "true" : "false"} onClick={() => device && choose(device.id)} title={row.timestamp}>
                       <StatusBadge status={row.severity} />
@@ -216,8 +215,6 @@ export function Overview() {
         alerts={alerts}
         alertCount={alertCount}
         disconnected={disconnected}
-        running={running}
-        incidentCount={incidentCount}
       />
     </div>
   );
@@ -229,7 +226,7 @@ function groupAlerts(alerts: FeedAlert[]): Array<FeedAlert & { count: number; si
     const time = new Date(alert.timestamp).getTime();
     const last = rows[rows.length - 1];
     const lastTime = last ? new Date(last.timestamp).getTime() : 0;
-    const simulation = alert.id.startsWith("sim-") || alert.detectorName === "Field station";
+    const simulation = alert.simulated ?? alert.id.startsWith("sim-");
     if (last && last.attackType === alert.attackType && last.sourceIp === alert.sourceIp && last.targetIp === alert.targetIp && Math.abs(time - lastTime) < 20000) {
       last.count += 1;
       last.simulation = last.simulation || simulation;

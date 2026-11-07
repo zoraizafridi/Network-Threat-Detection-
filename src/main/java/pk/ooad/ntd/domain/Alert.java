@@ -12,6 +12,7 @@ public abstract class Alert {
     private final String targetIp;
     private final String detectorName;
     private final String description;
+    private boolean simulated;
 
     protected Alert(String id, Instant timestamp, Severity severity, AttackType attackType,
                     String sourceIp, String targetIp, String detectorName, String description) {
@@ -57,6 +58,15 @@ public abstract class Alert {
 
     public String getDescription() {
         return description;
+    }
+
+    public boolean isSimulated() {
+        return simulated;
+    }
+
+    public Alert markSimulated(boolean simulated) {
+        this.simulated = simulated;
+        return this;
     }
 
     @Override

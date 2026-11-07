@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { FeedAlert } from "./alerts";
+import { capAlerts, type FeedAlert } from "./alerts";
 import { sessionAfterStatus, type SessionUser } from "./session";
 import type { Asset, IncidentRow, NetLink, PlanBody, SocTeam } from "./types";
 
@@ -27,7 +27,6 @@ interface AppState {
   attackToken: number;
   attack: { src: string; dst: string } | null;
   cue: { id: string; sourceIp: string; targetIp: string; severity: string } | null;
-  edgePulse: number;
   holdId: string | null;
   setUser: (user: SessionUser) => void;
   markSignedOut: () => void;
@@ -69,7 +68,6 @@ export const useApp = create<AppState>((set) => ({
   attackToken: 0,
   attack: null,
   cue: null,
-  edgePulse: 0,
   holdId: null,
   setUser: (user) => set({ auth: "in", user, notice: "" }),
   markSignedOut: () => set({ auth: "out", user: null }),
@@ -102,17 +100,16 @@ export const useApp = create<AppState>((set) => ({
       const duplicate = recent.some((row) => row.attackType === alert.attackType && row.sourceIp === alert.sourceIp && row.targetIp === alert.targetIp);
       if (duplicate) return state;
       return {
-      alerts: [...state.alerts, alert],
-      cue: {
-        id: alert.id,
-        sourceIp: alert.sourceIp,
-        targetIp: alert.targetIp,
-        severity: alert.severity,
-      },
-      edgePulse: alert.severity === "CRITICAL" ? state.edgePulse + 1 : state.edgePulse,
+        alerts: capAlerts([...state.alerts, alert]),
+        cue: {
+          id: alert.id,
+          sourceIp: alert.sourceIp,
+          targetIp: alert.targetIp,
+          severity: alert.severity,
+        },
       };
     }),
-  setAlerts: (alerts) => set({ alerts }),
+  setAlerts: (alerts) => set({ alerts: capAlerts(alerts) }),
   setIncidents: (incidents) => set({ incidents }),
   setSelectedId: (selectedId) => set({ selectedId }),
   setDisconnected: (disconnected) => set({ disconnected }),

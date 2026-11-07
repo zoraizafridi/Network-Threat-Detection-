@@ -26,6 +26,12 @@ export function statusLabel(status: string): string {
   return attackLabel(status);
 }
 
+export function clockTime(iso: string): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return iso;
+  return when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
 export function relativeTime(iso: string): string {
   const time = new Date(iso).getTime();
   if (Number.isNaN(time)) return "Unknown";

@@ -3,6 +3,7 @@ package pk.ooad.ntd.simulation;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import pk.ooad.ntd.util.ConfigManager;
 
 public class HostProfile {
     private double meanBytes;
@@ -18,7 +19,11 @@ public class HostProfile {
     }
 
     public HostProfile() {
-        this(512.0, 64.0, List.of(80, 443, 22), 5.0);
+        this(
+                ConfigManager.getInstance().getDouble("sim.host.meanBytes", 512.0),
+                ConfigManager.getInstance().getDouble("sim.host.stdBytes", 64.0),
+                List.of(80, 443, 22),
+                ConfigManager.getInstance().getDouble("sim.host.eventsPerSecond", 5.0));
     }
 
     public double getMeanBytes() {

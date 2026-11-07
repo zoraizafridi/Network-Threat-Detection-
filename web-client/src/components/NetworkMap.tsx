@@ -3,7 +3,8 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { ContactShadows, Line, OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
 import type { AttackPhase } from "../attackPhase";
-import { placeNodes, route, topology, type PlacedNode, type MapLink, type Vec3 } from "../mapPath";
+import { AUTO_ROTATE_RESUME_MS, AUTO_ROTATE_SPEED, shouldAutoRotate } from "../autoRotate";
+import { placeNodes, route, topology, type PlacedNode, type Vec3 } from "../mapPath";
 import { getScenario, STAGE_NAMES, subscribeScenario } from "../scenario";
 import { useApp } from "../store";
 import type { Asset } from "../types";
@@ -12,7 +13,6 @@ import { MAP, MAP_HEMI, MAP_DIR } from "./map/MapConfig";
 
 const NEUTRAL = MAP.nodeHealthy;
 const PRIMARY = MAP.ringHealthy;
-const OK = MAP.probed;
 const WARN = MAP.probed;
 const CRITICAL = MAP.compromised;
 const ISOLATED = MAP.isolated;
@@ -21,8 +21,26 @@ const LINE = MAP.link;
 const SCENE_COLOR = MAP.bg;
 const pointerArmed = { current: false };
 const hoveredId = { current: "" };
+const hoverListeners = new Set<() => void>();
 const pulsesOn = { current: true };
-const TEXT = "#e9e4d4";
+const trailsOn = { current: true };
+
+function subscribeHover(listener: () => void): () => void {
+  hoverListeners.add(listener);
+  return () => {
+    hoverListeners.delete(listener);
+  };
+}
+
+function hoveredSnapshot(): boolean {
+  return hoveredId.current !== "";
+}
+
+function setHovered(id: string) {
+  if (hoveredId.current === id) return;
+  hoveredId.current = id;
+  hoverListeners.forEach((listener) => listener());
+}
 
 export interface MapAttack {
   token: number | string;
@@ -32,14 +50,7 @@ export interface MapAttack {
   durationMs?: number;
 }
 
-type Placed = PlacedNode;
-type LinkLine = MapLink;
-
-function lift(position: Vec3): Vec3 {
-  return [position[0], 1.2, position[2]];
-}
-
-function statusTint(status: string): string | null {
+function statusTint(status: string): number | null {
   if (status === "COMPROMISED") return CRITICAL;
   if (status === "SUSPICIOUS") return WARN;
   if (status && status !== "NORMAL") return ISOLATED;
@@ -87,10 +98,7 @@ function HostNode({
   asset,
   position,
   selected,
-  onPath,
   dimmed,
-  showLabel,
-  labelNudge,
   attacker,
   mark,
   onSelect,
@@ -100,10 +108,7 @@ function HostNode({
   asset: Asset;
   position: Vec3;
   selected: boolean;
-  onPath: boolean;
   dimmed: boolean;
-  showLabel: boolean;
-  labelNudge: number;
   attacker: boolean;
   mark?: string;
   onSelect: (id: string) => void;
@@ -112,7 +117,6 @@ function HostNode({
 }) {
   const group = useRef<THREE.Group>(null);
   const shockMesh = useRef<THREE.Mesh>(null);
-  const [hovered, setHovered] = useState(false);
   const tint = statusTint(mark || asset.status);
   const ring = tint ?? PRIMARY;
   const body = tint ?? NEUTRAL;
@@ -125,7 +129,7 @@ function HostNode({
   const lastTick = useRef(0);
 
   useEffect(() => {
-    const clear = () => setHovered(false);
+    const clear = () => { document.body.style.cursor = ""; };
     window.addEventListener("fs-map-leave", clear);
     return () => {
       window.removeEventListener("fs-map-leave", clear);
@@ -187,13 +191,11 @@ function HostNode({
         onPointerOver={(event) => {
           event.stopPropagation();
           if (!pointerArmed.current) return;
-          hoveredId.current = asset.id;
-          setHovered(true);
+          setHovered(asset.id);
           document.body.style.cursor = "pointer";
         }}
         onPointerOut={() => {
-          if (hoveredId.current === asset.id) hoveredId.current = "";
-          setHovered(false);
+          if (hoveredId.current === asset.id) setHovered("");
           document.body.style.cursor = "";
         }}
       >
@@ -232,53 +234,6 @@ function HostNode({
   );
 }
 
-function HopPulse({
-  points,
-  paused,
-  duration,
-}: {
-  points: Vec3[];
-  paused: boolean;
-  duration: number;
-}) {
-  const mesh = useRef<THREE.Mesh>(null);
-  const started = useRef<number | null>(null);
-  const held = useRef<number | null>(null);
-  const lost = useRef(0);
-  useFrame((state) => {
-    const node = mesh.current;
-    if (!node || points.length < 2) return;
-    if (started.current === null) started.current = state.clock.elapsedTime;
-    if (paused) {
-      if (held.current === null) held.current = state.clock.elapsedTime;
-      return;
-    }
-    if (held.current !== null && started.current !== null) {
-      lost.current += state.clock.elapsedTime - held.current;
-      held.current = null;
-    }
-    const hops = points.length - 1;
-    const span = Math.max(0.2, duration);
-    const t = Math.min(1, (state.clock.elapsedTime - started.current - lost.current) / span);
-    const scaled = t * hops;
-    const index = Math.min(hops - 1, Math.floor(scaled));
-    const local = scaled - index;
-    const from = points[index];
-    const to = points[Math.min(hops, index + 1)];
-    node.position.set(
-      THREE.MathUtils.lerp(from[0], to[0], local),
-      THREE.MathUtils.lerp(from[1], to[1], local),
-      THREE.MathUtils.lerp(from[2], to[2], local),
-    );
-  });
-  return (
-    <mesh ref={mesh} position={points[0]}>
-      <sphereGeometry args={[0.28, 16, 16]} />
-      <meshStandardMaterial color={TEXT} emissive={CRITICAL} emissiveIntensity={1.2} />
-    </mesh>
-  );
-}
-
 function Drift({ a, b, offset }: { a: Vec3; b: Vec3; offset: number }) {
   const mesh = useRef<THREE.Mesh>(null);
   useFrame((state) => {
@@ -308,23 +263,35 @@ function springStep(current: THREE.Vector3, goal: THREE.Vector3, velocity: THREE
   current.addScaledVector(velocity, dt);
 }
 
-function FadeGrid() {
+function MapGround() {
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
         transparent: true,
         depthWrite: false,
-        uniforms: { tint: { value: new THREE.Color(MAP.grid) } },
+        uniforms: { tint: { value: new THREE.Color(MAP.groundLine) } },
         vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
+        /* One cell is one world unit, every fourth line is brighter, and both fade
+           out before the rim so the plate edge never shows a hard cut. */
         fragmentShader:
-          "varying vec2 vUv; uniform vec3 tint; void main(){ vec2 g = abs(fract(vUv * 22.0 - 0.5) - 0.5); float line = 1.0 - smoothstep(0.0, 0.06, min(g.x, g.y)); float radial = 1.0 - smoothstep(0.05, 0.75, length(vUv - 0.5)); gl_FragColor = vec4(tint, line * radial * 0.30); }",
+          "varying vec2 vUv; uniform vec3 tint; void main(){ float r = length(vUv - 0.5) * 2.0; float radial = 1.0 - smoothstep(0.45, 0.98, r); vec2 minorCell = abs(fract(vUv * 60.0 - 0.5) - 0.5); vec2 majorCell = abs(fract(vUv * 15.0 - 0.5) - 0.5); float minor = 1.0 - smoothstep(0.0, 0.035, min(minorCell.x, minorCell.y)); float major = 1.0 - smoothstep(0.0, 0.012, min(majorCell.x, majorCell.y)); float alpha = (minor * 0.16 + major * 0.5) * radial; gl_FragColor = vec4(tint, alpha); }",
       }),
     [],
   );
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.35, 0]} material={material}>
-      <planeGeometry args={[90, 90]} />
-    </mesh>
+    <group position={[0, -0.35, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}>
+        <circleGeometry args={[30, 96]} />
+        <meshBasicMaterial color={MAP.ground} transparent opacity={0.95} depthWrite={false} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} material={material}>
+        <circleGeometry args={[30, 96]} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.001, 0]}>
+        <ringGeometry args={[29.5, 30, 128]} />
+        <meshBasicMaterial color={MAP.groundRim} transparent opacity={0.7} side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+    </group>
   );
 }
 
@@ -335,89 +302,6 @@ function ringPoints(radius: number): Vec3[] {
     points.push([Math.cos(angle) * radius, 0.09, Math.sin(angle) * radius]);
   }
   return points;
-}
-
-function curveOf(a: Vec3, b: Vec3): THREE.QuadraticBezierCurve3 {
-  const span = Math.hypot(b[0] - a[0], b[2] - a[2]);
-  const mid = new THREE.Vector3((a[0] + b[0]) / 2, 0.2 + span * 0.08, (a[2] + b[2]) / 2);
-  return new THREE.QuadraticBezierCurve3(new THREE.Vector3(a[0], 0.2, a[2]), mid, new THREE.Vector3(b[0], 0.2, b[2]));
-}
-
-function easeInOut(t: number): number {
-  return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
-}
-
-const trailsOn = { current: true };
-
-function HopFlight({
-  from,
-  to,
-  duration,
-  paused,
-  thick,
-}: {
-  from: Vec3;
-  to: Vec3;
-  duration: number;
-  paused: boolean;
-  thick: boolean;
-}) {
-  const head = useRef<THREE.Mesh>(null);
-  const arrow = useRef<THREE.Mesh>(null);
-  const dots = useRef<THREE.Mesh[]>([]);
-  const started = useRef<number | null>(null);
-  const held = useRef<number | null>(null);
-  const lost = useRef(0);
-  const reduced = useReducedMotion();
-  const curve = useMemo(() => curveOf(from, to), [from, to]);
-  useFrame((state) => {
-    if (started.current === null) started.current = state.clock.elapsedTime;
-    if (paused) {
-      if (held.current === null) held.current = state.clock.elapsedTime;
-      return;
-    }
-    if (held.current !== null && started.current !== null) {
-      lost.current += state.clock.elapsedTime - held.current;
-      held.current = null;
-    }
-    const raw = reduced ? 1 : Math.min(1, (state.clock.elapsedTime - started.current - lost.current) / Math.max(0.2, duration));
-    const t = easeInOut(raw);
-    const point = curve.getPoint(t);
-    const ahead = curve.getPoint(Math.min(1, t + 0.04));
-    if (head.current) head.current.position.copy(point);
-    if (arrow.current) {
-      const mark = curve.getPoint(0.7);
-      const tangent = curve.getPoint(0.74);
-      arrow.current.position.copy(mark);
-      arrow.current.lookAt(tangent);
-    }
-    if (!trailsOn.current || reduced) return;
-    dots.current.forEach((dot, index) => {
-      if (!dot) return;
-      const sample = curve.getPoint(Math.max(0, t - (index + 1) * 0.035));
-      dot.position.copy(sample);
-    });
-  });
-  const drawn = curve.getPoints(32);
-  return (
-    <group>
-      <Line points={drawn} color={CRITICAL} lineWidth={thick ? 5 : 2.5} transparent opacity={thick ? 0.95 : 0.85} />
-      <mesh ref={head}>
-        <sphereGeometry args={[0.16, 12, 12]} />
-        <meshBasicMaterial color={CRITICAL} />
-      </mesh>
-      {Array.from({ length: 6 }, (_, index) => (
-        <mesh key={index} ref={(node) => { dots.current[index] = node as THREE.Mesh; }}>
-          <sphereGeometry args={[0.08, 8, 8]} />
-          <meshBasicMaterial color={CRITICAL} transparent opacity={0.7 - index * 0.1} />
-        </mesh>
-      ))}
-      <mesh ref={arrow}>
-        <coneGeometry args={[0.16, 0.42, 8]} />
-        <meshBasicMaterial color={CRITICAL} />
-      </mesh>
-    </group>
-  );
 }
 
 function ProjectedLabels({
@@ -536,12 +420,13 @@ function Scene({
   attack,
   phase,
   traffic,
-  paused,
   onSlow,
   marks,
   frameKey,
   frameIds,
   shadows,
+  autoRotate,
+  reducedMotion,
 }: {
   assets: Asset[];
   selectedId: string | null;
@@ -549,33 +434,25 @@ function Scene({
   attack: MapAttack | null;
   phase: AttackPhase;
   traffic: boolean;
-  paused: boolean;
   onSlow?: () => void;
   marks: Record<string, string>;
   frameKey: number;
   frameIds: string[];
   shadows: boolean;
+  autoRotate: boolean;
+  reducedMotion: boolean;
 }) {
   const placed = useMemo(() => placeNodes(assets), [assets]);
   const plannerView = useApp((state) => state.plannerView);
   const lines = useMemo(() => topology(placed), [placed]);
   const at = useMemo(() => new Map(placed.map((node) => [node.asset.id, node.position])), [placed]);
-  const radius = useMemo(() => {
-    let max = 8;
-    placed.forEach((node) => {
-      max = Math.max(max, Math.hypot(node.position[0], node.position[2]));
-    });
-    return max;
-  }, [placed]);
   const path = useMemo(() => {
     if (!attack) return [] as string[];
     if (attack.pathIds && attack.pathIds.length > 0) return attack.pathIds;
     return route(lines, attack.sourceId, attack.targetId);
   }, [attack, lines]);
-  const segment = attack ? [at.get(attack.sourceId), at.get(attack.targetId)].filter((point): point is Vec3 => Boolean(point)).map(lift) : [];
   const live = phase === "traveling" || phase === "impact";
   const involved = new Set(path);
-  const [handsOn, setHandsOn] = useState(false);
   const controls = useRef<any>(null);
   const camera = useThree((state) => state.camera);
   const viewSize = useThree((state) => state.size);
@@ -593,6 +470,38 @@ function Scene({
   useEffect(() => {
     pending.current = { key: frameKey, ids: idsRef.current.slice() };
   }, [frameKey]);
+
+  const hovering = useSyncExternalStore(subscribeHover, hoveredSnapshot, () => false);
+  const [dragging, setDragging] = useState(false);
+  const [idle, setIdle] = useState(true);
+  const idleTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+      idleTimer.current = null;
+    };
+  }, []);
+
+  const beginInput = () => {
+    handsRef.current = true;
+    setDragging(true);
+    setIdle(false);
+    if (idleTimer.current !== null) {
+      window.clearTimeout(idleTimer.current);
+      idleTimer.current = null;
+    }
+  };
+
+  const endInput = () => {
+    handsRef.current = false;
+    setDragging(false);
+    if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+    idleTimer.current = window.setTimeout(() => {
+      idleTimer.current = null;
+      setIdle(true);
+    }, AUTO_ROTATE_RESUME_MS);
+  };
 
   useFrame(() => {
     const ctrl = controls.current;
@@ -636,12 +545,32 @@ function Scene({
     }
   });
 
-  let labelSlot = 0;
+  // A hovered host counts as an active focus, so the camera holds still while the pointer is on it.
+  const rotating = shouldAutoRotate({
+    enabled: autoRotate,
+    reducedMotion,
+    dragging,
+    idleMs: idle ? AUTO_ROTATE_RESUME_MS : 0,
+    hasSelection: Boolean(selectedId) || hovering,
+    attackActive: Boolean(attack) && live,
+  });
 
   return (
     <>
       <PerspectiveCamera makeDefault position={[8, 24, 32]} fov={42} />
       <Fit nodes={placed} hold={live} />
+      <OrbitControls
+        ref={controls}
+        makeDefault
+        enableDamping
+        dampingFactor={0.1}
+        minPolarAngle={0.1}
+        maxPolarAngle={Math.PI / 2.1}
+        autoRotate={rotating}
+        autoRotateSpeed={AUTO_ROTATE_SPEED}
+        onStart={beginInput}
+        onEnd={endInput}
+      />
       <ProjectedLabels
         nodes={placed}
         attackerId={live && path[0] ? path[0] : null}
@@ -650,7 +579,10 @@ function Scene({
       <WatchFps onSlow={onSlow} />
       <hemisphereLight color={MAP_HEMI.skyColor} groundColor={MAP_HEMI.groundColor} intensity={MAP_HEMI.intensity} />
       <directionalLight color={MAP_DIR.color} intensity={MAP_DIR.intensity} position={MAP_DIR.position} castShadow={shadows} shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-radius={3} />
-      <fog attach="fog" args={[SCENE_COLOR, 20, 80]} />
+      {/* The camera sits about 75 units out, so the fog has to start past the node
+          ring. A near plane of 20 used to swallow every lit mesh while the lines,
+          which ignore fog, stayed visible. */}
+      <fog attach="fog" args={[SCENE_COLOR, 70, 170]} />
       <ContactShadows position={[0, -0.34, 0]} opacity={0.4} scale={48} blur={2.5} far={10} color="#000000" />
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
@@ -663,7 +595,7 @@ function Scene({
         <planeGeometry args={[240, 240]} />
         <meshBasicMaterial color={SCENE_COLOR} transparent opacity={0} depthWrite={false} />
       </mesh>
-      <FadeGrid />
+      <MapGround />
       {lines.map((line) => {
         const hot = involved.has(line.from) && involved.has(line.to) && live;
         const faded = (live && !hot) || Boolean(plannerView?.show);
@@ -690,28 +622,20 @@ function Scene({
       {traffic && !live
         ? lines.map((line, index) => <Drift key={`drift-${line.key}`} a={line.a} b={line.b} offset={index * 0.17} />)
         : null}
-      {placed.map((node) => {
-        const onPath = involved.has(node.asset.id) && live;
-        const visible = Boolean(selectedId === node.asset.id || onPath);
-        const nudge = visible ? (labelSlot++ % 3 - 1) * 14 : 0;
-        return (
+      {placed.map((node) => (
           <HostNode
             key={node.asset.id}
             asset={node.asset}
             position={[node.position[0], node.position[1] + 1.2, node.position[2]]}
             selected={selectedId === node.asset.id}
-            onPath={onPath}
             dimmed={Boolean(plannerView?.show && !plannerView.pairs.some((p) => p.source === node.asset.id || p.target === node.asset.id))}
-            showLabel={visible}
-            labelNudge={nudge}
             attacker={live && involved.has(node.asset.id)}
             mark={marks[node.asset.id]}
             onSelect={onSelect}
             excluded={plannerView?.excluded.includes(node.asset.id)}
             warned={plannerView?.unreachable.includes(node.asset.id)}
           />
-        );
-      })}
+        ))}
     </>
   );
 }
@@ -724,13 +648,13 @@ interface NetworkMapProps {
   phase?: AttackPhase;
   onImpact?: () => void;
   traffic?: boolean;
-  paused?: boolean;
   speed?: number;
   step?: number;
   marks?: Record<string, string>;
   frameKey?: number;
   frameIds?: string[];
   shadows?: boolean;
+  autoRotate?: boolean;
   onSlow?: () => void;
 }
 
@@ -741,13 +665,15 @@ export function NetworkMap({
   attack,
   phase = "idle",
   traffic = false,
-  paused = false,
   marks = {},
   frameKey = 0,
   frameIds = [],
   shadows = true,
+  autoRotate = false,
   onSlow,
 }: NetworkMapProps) {
+  const reducedMotion = useReducedMotion();
+
   return (
     <Suspense fallback={null}>
       <Canvas
@@ -755,11 +681,11 @@ export function NetworkMap({
         dpr={[1, 1.5]}
         resize={{ debounce: 220 }}
         gl={{ antialias: true, alpha: false }}
-        shadows={shadows}
+        shadows={shadows ? "percentage" : false}
         onPointerMove={() => { pointerArmed.current = true; }}
         onPointerLeave={() => {
           pointerArmed.current = false;
-          hoveredId.current = "";
+          setHovered("");
           window.dispatchEvent(new Event("fs-map-leave"));
         }}
         onCreated={({ gl, camera, raycaster }) => {
@@ -775,31 +701,47 @@ export function NetworkMap({
           attack={attack ?? null}
           phase={phase}
           traffic={traffic}
-          paused={paused}
           onSlow={onSlow}
           marks={marks}
           frameKey={frameKey}
           frameIds={frameIds}
           shadows={shadows}
+          autoRotate={autoRotate}
+          reducedMotion={reducedMotion}
         />
       </Canvas>
     </Suspense>
   );
 }
 
+let webglSupport: boolean | null = null;
+
 function webglOk(): boolean {
+  if (webglSupport !== null) {
+    return webglSupport;
+  }
   try {
     const canvas = document.createElement("canvas");
-    return Boolean(canvas.getContext("webgl2") || canvas.getContext("webgl"));
+    const probe = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    webglSupport = Boolean(probe);
+    const lose = probe?.getExtension("WEBGL_lose_context");
+    lose?.loseContext();
   } catch {
+    webglSupport = false;
+  }
+  return webglSupport;
+}
 
-function FlatMap({ assets, selectedId, onSelect, attack, phase, marks }: {
+function hex(value: number): string {
+  return `#${value.toString(16).padStart(6, "0")}`;
+}
+
+function FlatMap({ assets, selectedId, onSelect, attack, phase }: {
   assets: Asset[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   attack?: MapAttack | null;
   phase?: AttackPhase;
-  marks?: Record<string, string>;
 }) {
   const placed = useMemo(() => placeNodes(assets), [assets]);
   const lines = useMemo(() => topology(placed), [placed]);
@@ -807,18 +749,61 @@ function FlatMap({ assets, selectedId, onSelect, attack, phase, marks }: {
   const path = attack ? (attack.pathIds ?? route(lines, attack.sourceId, attack.targetId)) : [];
   const involved = new Set(path);
   const tint = (status: string): string => {
-    if (status === "COMPROMISED") return MAP.compromised.toString(16).padStart(6, "0");
-    if (status === "SUSPICIOUS") return MAP.probed.toString(16).padStart(6, "0");
-    if (status && status !== "NORMAL") return MAP.isolated.toString(16).padStart(6, "0");
-    return MAP.nodeHealthy.toString(16).padStart(6, "0");
+    if (status === "COMPROMISED") return hex(MAP.compromised);
+    if (status === "SUSPICIOUS") return hex(MAP.probed);
+    if (status && status !== "NORMAL") return hex(MAP.isolated);
+    return hex(MAP.nodeHealthy);
   };
+  /* Nodes are placed in a 48 unit circle, so the SVG needs a matching viewBox.
+     Without one each unit maps to a pixel and the map renders as a small cluster
+     in the top left corner of a much larger element. */
+  const view = useMemo(() => {
+    const xs = placed.map((node) => node.position[0]);
+    const zs = placed.map((node) => node.position[2]);
+    /* The pad leaves room for the ground plate, which is drawn a little wider than
+       the outermost ring so the plate edge is always inside the frame. */
+    const pad = 13;
+    const minX = (xs.length > 0 ? Math.min(...xs) : -22) + 24 - pad;
+    const maxX = (xs.length > 0 ? Math.max(...xs) : 22) + 24 + pad;
+    const minY = (zs.length > 0 ? -Math.max(...zs) : -22) + 24 - pad;
+    const maxY = (zs.length > 0 ? -Math.min(...zs) : 22) + 24 + pad;
+    const size = Math.max(maxX - minX, maxY - minY, 68);
+    return { x: (minX + maxX) / 2 - size / 2, y: (minY + maxY) / 2 - size / 2, size };
+  }, [placed]);
   return (
-    <svg className="flat-map" width="100%" height="100%" style={{ background: "#07100b" }}>
+    <svg
+      className="flat-map"
+      viewBox={`${view.x} ${view.y} ${view.size} ${view.size}`}
+      preserveAspectRatio="xMidYMid meet"
+      role="group"
+      aria-label="Network topology, flat view"
+    >
       <defs>
-        <marker id="arrow" markerWidth="10" markerHeight="7" refX="8" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill={MAP.link.toString(16).padStart(6, "0")} />
+        <radialGradient id="flat-plate" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#0F2218" stopOpacity="0.98" />
+          <stop offset="72%" stopColor="#0B1A11" stopOpacity="0.9" />
+          <stop offset="100%" stopColor="#07100B" stopOpacity="0.55" />
+        </radialGradient>
+        {/* Six world units per cell keeps the grid readable without crowding the rings. */}
+        <pattern id="flat-grid" width="6" height="6" patternUnits="userSpaceOnUse">
+          <path className="flat-grid-line" d="M6 0H0V6" fill="none" strokeWidth="0.07" />
+        </pattern>
+        <marker id="flat-arrow" markerWidth="3" markerHeight="2.2" refX="2.4" refY="1.1" orient="auto">
+          <polygon points="0 0, 3 1.1, 0 2.2" fill={hex(MAP.link)} />
         </marker>
       </defs>
+      {/* Same idea as the 3D scene: a plate laid on top of the page background, with a
+         grid and a rim, so the ground is never confused with the empty canvas. */}
+      <g className="flat-ground" aria-hidden="true">
+        <circle cx={24} cy={24} r={30} fill="url(#flat-plate)" />
+        <circle cx={24} cy={24} r={30} fill="url(#flat-grid)" />
+        <circle className="flat-ground-rim" cx={24} cy={24} r={30} />
+      </g>
+      <g className="flat-guides" aria-hidden="true">
+        {[8, 16, 22].map((radius) => (
+          <circle key={radius} cx={24} cy={24} r={radius} />
+        ))}
+      </g>
       {lines.map((line) => {
         const hot = involved.has(line.from) && involved.has(line.to) && live;
         return (
@@ -826,10 +811,10 @@ function FlatMap({ assets, selectedId, onSelect, attack, phase, marks }: {
             key={line.key}
             x1={line.a[0] + 24} y1={24 - line.a[2]}
             x2={line.b[0] + 24} y2={24 - line.b[2]}
-            stroke={hot ? MAP.compromised.toString(16).padStart(6, "0") : MAP.link.toString(16).padStart(6, "0")}
-            strokeWidth={hot ? 3 : 1}
-            strokeOpacity={hot ? 1 : 0.35}
-            markerEnd={hot ? "url(#arrow)" : undefined}
+            stroke={hot ? hex(MAP.compromised) : hex(MAP.link)}
+            strokeWidth={hot ? 0.55 : 0.22}
+            strokeOpacity={hot ? 1 : 0.4}
+            markerEnd={hot ? "url(#flat-arrow)" : undefined}
           />
         );
       })}
@@ -838,21 +823,32 @@ function FlatMap({ assets, selectedId, onSelect, attack, phase, marks }: {
         const selected = selectedId === node.asset.id;
         const t = tint(node.asset.status);
         const core = node.asset.type === "ROUTER" && /core/i.test(`${node.asset.id} ${node.asset.name}`);
-        const r = core ? 9 : (onPath || selected ? 7 : 5);
+        const r = core ? 2.6 : (onPath || selected ? 2.1 : 1.5);
+        const cx = node.position[0] + 24;
+        const cy = 24 - node.position[2];
         return (
-          <g key={node.asset.id} onClick={(e) => { e.stopPropagation(); onSelect(node.asset.id); }}>
-            <circle cx={node.position[0] + 24} cy={24 - node.position[2]} r={r + 2} fill={MAP.ringHealthy.toString(16).padStart(6, "0")} fillOpacity={selected ? 1 : 0.35} />
-            <circle cx={node.position[0] + 24} cy={24 - node.position[2]} r={r} fill={t} fillOpacity={1} />
-            {selected ? <circle cx={node.position[0] + 24} cy={24 - node.position[2]} r={r + 4} fill="none" stroke={MAP.selection.toString(16).padStart(6, "0")} strokeWidth={2} /> : null}
+          <g
+            key={node.asset.id}
+            className="flat-node"
+            role="button"
+            tabIndex={0}
+            aria-label={`${node.asset.name}, ${node.asset.status.toLowerCase()}`}
+            onClick={(e) => { e.stopPropagation(); onSelect(node.asset.id); }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              onSelect(node.asset.id);
+            }}
+          >
+            <title>{`${node.asset.name} (${node.asset.ip}) - ${node.asset.status}`}</title>
+            <circle cx={cx} cy={cy} r={r + 0.7} fill={hex(MAP.ringHealthy)} fillOpacity={selected ? 1 : 0.35} />
+            <circle className="flat-node-dot" cx={cx} cy={cy} r={r} fill={t} fillOpacity={1} />
+            {selected ? <circle cx={cx} cy={cy} r={r + 1.1} fill="none" stroke={hex(MAP.selection)} strokeWidth={0.45} /> : null}
           </g>
         );
       })}
     </svg>
   );
-}
-
-    return false;
-  }
 }
 
 export function NetworkStage(props: {
@@ -872,6 +868,10 @@ export function NetworkStage(props: {
 }) {
   const [mode, setMode] = useState<"3d" | "2d">(webglOk() ? "3d" : "2d");
   const [tier, setTier] = useState(0);
+  const reduced = useReducedMotion();
+  // The rotation choice stays in component state only, never in storage.
+  const [rotateOn, setRotateOn] = useState(true);
+  const rotate = rotateOn && !reduced;
   const flat = mode === "2d";
   const scenario = useSyncExternalStore(subscribeScenario, getScenario);
   const running = scenario.phase === "run" || (scenario.phase === "paused" && scenario.stage >= 0 && scenario.stage < 4);
@@ -884,13 +884,37 @@ export function NetworkStage(props: {
       <div className="topo-toggle">
         <button type="button" className={!flat ? "on" : undefined} onClick={() => { pulsesOn.current = true; trailsOn.current = true; setTier(0); setMode("3d"); }} disabled={!webglOk()}>3D</button>
         <button type="button" className={flat ? "on" : undefined} onClick={() => setMode("2d")}>2D</button>
+        {flat ? null : (
+          <button
+            type="button"
+            className={rotate ? "on" : undefined}
+            aria-pressed={rotate}
+            onClick={() => setRotateOn((value) => !value)}
+            disabled={reduced}
+            title={reduced
+              ? "Auto-rotate is off because this device asks for reduced motion."
+              : "Auto-rotate the 3D map, about one turn per 100 seconds. Pauses while you drag."}
+          >
+            Rotate
+          </button>
+        )}
       </div>
       {flat ? (
-        <FlatMap assets={props.assets} selectedId={props.selectedId} onSelect={props.onSelect} attack={props.attack} phase={props.phase} marks={props.marks} />
+        <FlatMap assets={props.assets} selectedId={props.selectedId} onSelect={props.onSelect} attack={props.attack} phase={props.phase} />
       ) : (
         <NetworkMap
-          {...props}
+          assets={props.assets}
+          selectedId={props.selectedId}
+          onSelect={props.onSelect}
+          attack={props.attack}
+          phase={props.phase}
+          onImpact={props.onImpact}
+          traffic={props.traffic}
+          marks={props.marks}
+          frameKey={props.frameKey}
+          frameIds={props.frameIds}
           shadows={tier < 1}
+          autoRotate={rotate}
           onSlow={() => setTier((level) => {
             const next = level + 1;
             if (next >= 2) {

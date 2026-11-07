@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import type { FeedAlert } from "../alerts";
-import { applyState, loadAlerts, loadNetwork, type StateBody } from "../api";
+import { applyState, loadAlerts, loadIncidents, loadNetwork, type StateBody } from "../api";
 import { useApp } from "../store";
-import type { Asset, NetLink } from "../types";
+import type { Asset, IncidentRow, NetLink } from "../types";
 
 export function usePortalData(active: boolean): void {
   useEffect(() => {
@@ -26,6 +26,10 @@ export function usePortalData(active: boolean): void {
         const payload = parse<StateBody>((event as MessageEvent).data);
         if (payload) applyState(payload);
       });
+      source.addEventListener("incidents", (event) => {
+        const payload = parse<IncidentRow[]>((event as MessageEvent).data);
+        if (payload) useApp.getState().setIncidents(payload);
+      });
       source.onerror = () => {
         useApp.getState().setDisconnected(true);
         source?.close();
@@ -36,6 +40,7 @@ export function usePortalData(active: boolean): void {
     connect();
     loadNetwork().catch(() => undefined);
     loadAlerts().catch(() => undefined);
+    loadIncidents().catch(() => undefined);
     return () => {
       stopped = true;
       window.clearTimeout(timer);

@@ -181,5 +181,23 @@ class TrafficSimulatorTest {
         NetworkEvent event2 = singleSim.generateNormalEvent();
         assertNotNull(event2);
     }
+
+    @Test
+    @DisplayName("Clock: systemUTC generates advancing live timestamps, fixedClock generates deterministic timestamps")
+    void testSystemAndFixedClocks() throws InterruptedException {
+        TrafficSimulator liveSim = new TrafficSimulator(TopologyLoader.loadSample(), 42L);
+        NetworkEvent ev1 = liveSim.generateNormalEvent();
+        Thread.sleep(10);
+        NetworkEvent ev2 = liveSim.generateNormalEvent();
+        assertTrue(ev2.timestamp().isAfter(ev1.timestamp()) || ev2.timestamp().equals(ev1.timestamp()));
+        assertTrue(ev1.timestamp().isAfter(java.time.Instant.parse("2026-01-01T00:00:00Z")));
+
+        java.time.Instant fixedTime = java.time.Instant.parse("2026-06-01T12:00:00Z");
+        TrafficSimulator fixedSim = new TrafficSimulator(TopologyLoader.loadSample(), java.time.Clock.fixed(fixedTime, java.time.ZoneOffset.UTC), 42L);
+        NetworkEvent f1 = fixedSim.generateNormalEvent();
+        NetworkEvent f2 = fixedSim.generateNormalEvent();
+        assertEquals(fixedTime, f1.timestamp());
+        assertEquals(fixedTime, f2.timestamp());
+    }
 }
 

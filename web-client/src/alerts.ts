@@ -7,6 +7,7 @@ export interface FeedAlert {
   targetIp: string;
   detectorName: string;
   description: string;
+  simulated?: boolean;
 }
 
 export const FEED_CAP = 500;

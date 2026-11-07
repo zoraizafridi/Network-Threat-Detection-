@@ -33,6 +33,7 @@ class WebServerTest {
     private IncidentResponseFacade facade;
     private WebServer server;
     private HttpClient http;
+    private CookieManager cookies;
     private int port;
 
     @BeforeEach
@@ -41,7 +42,7 @@ class WebServerTest {
         server = new WebServer(facade, 0);
         server.start(0);
         port = server.port();
-        CookieManager cookies = new CookieManager();
+        cookies = new CookieManager();
         cookies.setCookiePolicy(CookiePolicy.ACCEPT_ALL);
         http = HttpClient.newBuilder()
                 .cookieHandler(cookies)
@@ -223,15 +224,195 @@ class WebServerTest {
         }
     }
 
+    @Test
+    void securityHeadersAndCookieFlagsArePresent() throws Exception {
+        HttpResponse<String> response = call("GET", "/api/state", null);
+        assertTrue(response.headers().firstValue("X-Frame-Options").isPresent());
+        assertEquals("DENY", response.headers().firstValue("X-Frame-Options").get());
+        assertEquals("nosniff", response.headers().firstValue("X-Content-Type-Options").get());
+        assertTrue(response.headers().firstValue("Content-Security-Policy").isPresent());
+        String csp = response.headers().firstValue("Content-Security-Policy").get();
+        assertTrue(csp.contains("object-src 'none'"), csp);
+        assertTrue(csp.contains("frame-ancestors 'none'"), csp);
+        assertTrue(csp.contains("base-uri 'self'"), csp);
+        assertTrue(response.headers().firstValue("Referrer-Policy").isPresent());
+    }
+
+    @Test
+    void crossOriginPostIsRejected() throws Exception {
+        login("admin", "admin");
+        HttpRequest request = HttpRequest.newBuilder(uri("/api/sim/start"))
+                .header("Content-Type", "application/json")
+                .header("X-CSRF-Token", csrf())
+                .header("Origin", "https://evil.example")
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+        HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(403, response.statusCode());
+    }
+
+    @Test
+    void attackWithSameSourceAndTargetIsRejected() throws Exception {
+        login("admin", "admin");
+        String json = "{\"type\":\"PORT_SCAN\",\"src\":\"srv-web-1\",\"dst\":\"srv-web-1\"}";
+        HttpResponse<String> response = call("POST", "/api/attacks", json);
+        assertEquals(400, response.statusCode());
+    }
+
+    @Test
+    void unknownApiPathReturns404() throws Exception {
+        assertEquals(404, call("GET", "/api/does-not-exist", null).statusCode());
+        login("admin", "admin");
+        assertEquals(404, call("GET", "/api/nope", null).statusCode());
+    }
+
+    @Test
+    void postWithoutCsrfHeaderIsRejected() throws Exception {
+        login("admin", "admin");
+        HttpRequest request = HttpRequest.newBuilder(uri("/api/sim/start"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+        assertEquals(403, http.send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
+    }
+
+    @Test
+    void csrfCookieCarriesStrictSameSiteAndMaxAge() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(uri("/api/login"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"username\":\"admin\",\"password\":\"admin\"}"))
+                .build();
+        HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, response.statusCode(), response.body());
+        String setCookie = response.headers().allValues("Set-Cookie").stream()
+                .filter(value -> value.startsWith("csrf="))
+                .findFirst()
+                .orElse("");
+        assertTrue(setCookie.startsWith("csrf="), setCookie);
+        assertTrue(setCookie.contains("Path=/"), setCookie);
+        assertTrue(setCookie.contains("Max-Age="), setCookie);
+        assertTrue(setCookie.contains("SameSite=Strict"), setCookie);
+    }
+
+    @Test
+    void nonJsonContentTypeIsRejected() throws Exception {
+        login("admin", "admin");
+        HttpRequest request = HttpRequest.newBuilder(uri("/api/attacks"))
+                .header("Content-Type", "text/plain")
+                .header("X-CSRF-Token", csrf())
+                .POST(HttpRequest.BodyPublishers.ofString("{\"type\":\"DOS_FLOOD\"}"))
+                .build();
+        assertEquals(415, http.send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
+    }
+
+    @Test
+    void repeatedLoginFailuresAreThrottled() throws Exception {
+        for (int attempt = 0; attempt < 5; attempt++) {
+            assertEquals(401, call("POST", "/api/login",
+                    "{\"username\":\"admin\",\"password\":\"wrong\"}").statusCode());
+        }
+        HttpResponse<String> blocked = call("POST", "/api/login",
+                "{\"username\":\"admin\",\"password\":\"admin\"}");
+        assertEquals(429, blocked.statusCode());
+        assertTrue(blocked.headers().firstValue("Retry-After").isPresent());
+    }
+
+    @Test
+    void injectedAttackAlertsAreFlaggedAsSimulated() throws Exception {
+        login("admin", "admin");
+        assertEquals(200, call("POST", "/api/sim/start", null).statusCode());
+        assertEquals(200, call("POST", "/api/attacks",
+                "{\"type\":\"DOS_FLOOD\",\"src\":\"ws-ops-1\",\"dst\":\"srv-web-1\"}").statusCode());
+        JsonNode alert = awaitAlert("DOS_FLOOD");
+        assertNotNull(alert, "expected a DOS_FLOOD alert");
+        assertTrue(alert.get("simulated").asBoolean(), "injected alerts must be marked simulated");
+        assertFalse(alert.get("detectorName").asText().isBlank());
+    }
+
+    @Test
+    void streamSendsHelloEventOnSubscribe() throws Exception {
+        login("admin", "admin");
+        HttpRequest request = HttpRequest.newBuilder(uri("/api/stream"))
+                .timeout(Duration.ofSeconds(8))
+                .header("Accept", "text/event-stream")
+                .GET()
+                .build();
+        HttpResponse<java.io.InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        assertEquals(200, response.statusCode());
+        try (BufferedReader lines = new BufferedReader(
+                new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+            String event = null;
+            String line;
+            while ((line = lines.readLine()) != null) {
+                if (line.startsWith("event:")) {
+                    event = line;
+                    break;
+                }
+            }
+            assertNotNull(event, "stream must greet the client");
+            assertTrue(event.contains("hello"), event);
+        } finally {
+            response.body().close();
+        }
+    }
+
+    @Test
+    void configEndpointIsAdminOnly() throws Exception {
+        login("viewer", "viewer");
+        assertEquals(403, call("GET", "/api/config", null).statusCode());
+        JsonNode body = login("admin", "admin");
+        assertEquals("Admin", body.get("role").asText());
+        HttpResponse<String> response = call("GET", "/api/config", null);
+        assertEquals(200, response.statusCode());
+        JsonNode config = mapper.readTree(response.body());
+        assertTrue(config.get("thresholds").has("risk.compromiseThreshold"));
+        assertTrue(config.get("session").get("csrfEnabled").asBoolean());
+        assertEquals(3, config.get("accounts").size());
+    }
+
+    @Test
+    void negativeAlertLimitIsRejected() throws Exception {
+        login("admin", "admin");
+        assertEquals(400, call("GET", "/api/alerts?limit=-1", null).statusCode());
+    }
+
+    private JsonNode awaitAlert(String attackType) throws Exception {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (System.currentTimeMillis() < deadline) {
+            JsonNode body = mapper.readTree(call("GET", "/api/alerts?limit=50", null).body());
+            if (body.isArray()) {
+                for (JsonNode alert : body) {
+                    if (attackType.equals(alert.path("attackType").asText())) {
+                        return alert;
+                    }
+                }
+            }
+            Thread.sleep(25);
+        }
+        return null;
+    }
+
     private HttpResponse<String> call(String method, String path, String json) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(5));
         if ("POST".equals(method)) {
             builder.header("Content-Type", "application/json");
+            String token = csrf();
+            if (token != null) {
+                builder.header("X-CSRF-Token", token);
+            }
             builder.POST(HttpRequest.BodyPublishers.ofString(json == null ? "" : json));
         } else {
             builder.GET();
         }
         return http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private String csrf() {
+        return cookies.getCookieStore().getCookies().stream()
+                .filter(cookie -> "csrf".equals(cookie.getName()))
+                .map(java.net.HttpCookie::getValue)
+                .findFirst()
+                .orElse(null);
     }
 
     private URI uri(String path) {

@@ -1,15 +1,16 @@
-import { useLayoutEffect, useRef } from "react";
+﻿import { useLayoutEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import Lenis from "lenis";
 import "lenis/dist/lenis.css";
-import { loadState } from "../api";
 import { useApp } from "../store";
 import { NeuralBrainBackground } from "../components/NeuralBrainBackground";
 import { NetworkHeroSection } from "../components/NetworkHeroSection";
 import { ParticleBackground } from "../components/ParticleBackground";
 import { useReducedMotion } from "../useReducedMotion";
+import { SYSTEM_NAME } from "../brand";
+import { cssToken } from "../theme";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -65,7 +66,7 @@ function MoveIcon({ name }: { name: string }) {
 
 function settleLower(stage: HTMLElement) {
   gsap.set(stage.querySelector(".process-line"), { scaleX: 1 });
-  gsap.set(stage.querySelectorAll(".replica-process h3"), { color: "#E8DCC4" });
+  gsap.set(stage.querySelectorAll(".replica-process h3"), { color: cssToken("--text-heading", "#E8DCC4") });
   gsap.set(stage.querySelectorAll(".close-word"), { y: 0, opacity: 1 });
   gsap.set(stage.querySelectorAll(".close-net-lines path"), { strokeDashoffset: 0 });
 }
@@ -79,10 +80,6 @@ export function Landing() {
   const entering = useRef(false);
   const enterTl = useRef<gsap.core.Tween | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-
-  useLayoutEffect(() => {
-    loadState().catch(() => undefined);
-  }, []);
 
   useLayoutEffect(() => {
     const stage = root.current;
@@ -121,6 +118,8 @@ export function Landing() {
       const line = stage.querySelector(".process-line");
       const icons = stage.querySelectorAll<SVGSVGElement>(".move-icon");
       const titles = stage.querySelectorAll(".replica-process h3");
+      const titleIdle = cssToken("--text-label", "#A7B8AC");
+      const titleLit = cssToken("--text-heading", "#E8DCC4");
       icons.forEach((icon) => {
         icon.querySelectorAll("circle, line, rect, path").forEach((shape) => {
           if (!(shape instanceof SVGGeometryElement) || typeof shape.getTotalLength !== "function") return;
@@ -129,7 +128,7 @@ export function Landing() {
         });
       });
       gsap.set(line, { scaleX: 0, transformOrigin: "left center" });
-      gsap.set(titles, { color: "#92A39A" });
+      gsap.set(titles, { color: titleIdle });
       const draw = gsap.timeline({
         scrollTrigger: {
           trigger: ".replica-process ol",
@@ -143,7 +142,7 @@ export function Landing() {
         const marks = icon.querySelectorAll("circle, line, rect, path");
         const at = index * 0.25;
         draw.to(marks, { strokeDashoffset: 0, ease: "none", duration: 0.18 }, at);
-        draw.set(titles[index], { color: "#E8DCC4" }, at + 0.14);
+        draw.set(titles[index], { color: titleLit }, at + 0.14);
       });
       gsap.fromTo(
         ".close-word",
@@ -233,7 +232,7 @@ export function Landing() {
         {reduced ? null : <ParticleBackground reduced={false} />}
         <div className="vesper-scrim" aria-hidden="true" />
         <header className="nav">
-          <p className="vesper-brand">Field Station</p>
+          <p className="vesper-brand">{SYSTEM_NAME}</p>
           <nav className="nav-links" aria-label="Landing">
             {MOVES.map((move) => (
               <button key={move.title} type="button" onClick={() => jump(move.title === "Detect" ? "process-section" : move.title.toLowerCase())}>
@@ -244,10 +243,10 @@ export function Landing() {
           <button type="button" className="enter-pill" onClick={enter}>Enter Portal</button>
         </header>
         <div className="vesper-center">
-          <p className="badge">✦ SECURE NETWORK ACTIVE</p>
+          <p className="badge">SECURE NETWORK ACTIVE</p>
           <h1>
             {"Detection for a live network.".split(" ").map((word, index) => (
-              <span key={`${word}-${index}`} className="word heading-word">{word}</span>
+              <span key={`${word}-${index}`} className={`word heading-word${word === "Detection" ? " is-gold" : ""}`}>{word}</span>
             ))}
           </h1>
           <p className="subline">
@@ -257,7 +256,7 @@ export function Landing() {
           </p>
           <button type="button" className="action-btn" onClick={enter}>Enter portal</button>
         </div>
-        <p className="vesper-foot">© 2026 Field Station - Network Threat Detection System.</p>
+        <p className="vesper-foot">{"\u00A9"} 2026 {SYSTEM_NAME}.</p>
       </section>
 
       <section className="replica-process" id="process-section">
@@ -301,7 +300,7 @@ export function Landing() {
             network.
           </h2>
           <p>Explore the topology, inspect hosts and trace active threats across eighteen assets.</p>
-          <a className="text-link" href="#process-section">Explore the network →</a>
+          <a className="text-link" href="#process-section">Explore the network {"\u2192"}</a>
         </div>
         <NetworkHeroSection />
       </section>
@@ -357,8 +356,8 @@ export function Landing() {
 
       <footer className="replica-foot">
         <p>CT-263 Object-Oriented Analysis and Design</p>
-        <p>Network Threat Detection & Cyber Security Monitoring System</p>
-        <button type="button" onClick={enter}>Enter portal →</button>
+        <p>{SYSTEM_NAME}</p>
+        <button type="button" onClick={enter}>Enter portal {"\u2192"}</button>
       </footer>
     </main>
   );

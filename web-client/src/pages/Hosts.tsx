@@ -53,7 +53,7 @@ export function HostDetail() {
         <Link to="/portal/hosts">All hosts</Link>
       </p>
       <HostPanel asset={asset} links={links} alerts={alerts} history={asset ? (history[asset.id] ?? []) : []} />
-      <p className="muted">Assigned tasks are listed by team on the planner. The plan payload does not name a host for each task.</p>
+      <p className="muted">Assigned tasks and mitigation actions are listed by team on the <Link to="/portal/planner">planner</Link>.</p>
     </div>
   );
 }

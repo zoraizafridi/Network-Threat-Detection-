@@ -61,6 +61,18 @@ class UserTest {
         Viewer plainUser = new Viewer("bob", "plainP@ss");
         assertTrue(plainUser.checkPassword("plainP@ss"), "Direct password match supported");
         assertFalse(plainUser.checkPassword("other"), "Wrong password must return false");
+
+        // Salted hash
+        String salt = "testSalt";
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] d = md.digest((salt + "securePass").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : d) sb.append(String.format("%02x", b));
+            Admin saltedUser = new Admin("charlie", salt + "$" + sb);
+            assertTrue(saltedUser.checkPassword("securePass"), "Salted password check must succeed");
+            assertFalse(saltedUser.checkPassword("wrongPass"), "Salted password check must fail on bad pass");
+        } catch (java.security.NoSuchAlgorithmException ignored) {}
     }
 
     @Test

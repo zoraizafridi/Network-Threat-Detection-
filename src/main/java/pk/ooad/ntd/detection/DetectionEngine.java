@@ -24,6 +24,8 @@ public class DetectionEngine {
     private final AtomicBoolean running;
     private int cooldownSeconds;
     private final Map<String, Instant> lastAlertAt;
+    private final long queuePollMillis;
+    private final long workerJoinMillis;
 
     public DetectionEngine(BlockingQueue<NetworkEvent> queue, AlertBus alertBus, int cooldownSeconds) {
         this.queue = Objects.requireNonNull(queue, "queue must not be null");
@@ -32,6 +34,9 @@ public class DetectionEngine {
         this.detectors = new CopyOnWriteArrayList<>();
         this.running = new AtomicBoolean(false);
         this.lastAlertAt = new ConcurrentHashMap<>();
+        ConfigManager config = ConfigManager.getInstance();
+        this.queuePollMillis = config.getInt("engine.queue.pollMillis", 50);
+        this.workerJoinMillis = config.getInt("engine.worker.joinMillis", 1000);
     }
 
     public DetectionEngine(BlockingQueue<NetworkEvent> queue, AlertBus alertBus) {
@@ -51,7 +56,7 @@ public class DetectionEngine {
         if (worker != null) {
             worker.interrupt();
             try {
-                worker.join(1000);
+                worker.join(workerJoinMillis);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
@@ -75,7 +80,7 @@ public class DetectionEngine {
     private void runLoop() {
         while (running.get()) {
             try {
-                NetworkEvent event = queue.poll(50, TimeUnit.MILLISECONDS);
+                NetworkEvent event = queue.poll(queuePollMillis, TimeUnit.MILLISECONDS);
                 if (event != null) {
                     process(event);
                 }
@@ -105,7 +110,7 @@ public class DetectionEngine {
                 }
 
                 lastAlertAt.put(source, now);
-                alertBus.publish(alert);
+                alertBus.publish(alert.markSimulated(e.simulated()));
             }
         }
     }

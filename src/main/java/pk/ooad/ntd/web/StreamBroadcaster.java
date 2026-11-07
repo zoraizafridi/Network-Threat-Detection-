@@ -2,6 +2,7 @@ package pk.ooad.ntd.web;
 
 import pk.ooad.ntd.detection.AlertListener;
 import pk.ooad.ntd.domain.Alert;
+import pk.ooad.ntd.util.ConfigManager;
 
 import io.javalin.http.sse.SseClient;
 
@@ -19,8 +20,8 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 
 public class StreamBroadcaster implements AlertListener {
-    private static final int RECENT_MAX = 500;
-    private static final long NETWORK_INTERVAL_NANOS = 1_000_000_000L / 4L;
+    private final int recentMax;
+    private final long networkIntervalNanos;
 
     private final Set<SseClient> clients = ConcurrentHashMap.newKeySet();
     private final Deque<Alert> recent = new ArrayDeque<>();
@@ -33,14 +34,22 @@ public class StreamBroadcaster implements AlertListener {
     private Function<Alert, String> alertJson = alert -> "";
     private java.util.function.Supplier<String> networkJson = () -> "{}";
     private BiFunction<String, String, String> stateJson = (username, role) -> "{}";
+    private java.util.function.Supplier<String> incidentJson = () -> "{}";
     private long lastNetworkAt;
     private boolean networkPending;
 
+    public StreamBroadcaster() {
+        ConfigManager config = ConfigManager.getInstance();
+        this.recentMax = Math.max(1, config.getInt("alerts.buffer.max", 500));
+        this.networkIntervalNanos = Math.max(1L, config.getInt("stream.network.intervalMillis", 250)) * 1_000_000L;
+    }
+
     void setEncoders(Function<Alert, String> alertJson, java.util.function.Supplier<String> networkJson,
-                     BiFunction<String, String, String> stateJson) {
+                     BiFunction<String, String, String> stateJson, java.util.function.Supplier<String> incidentJson) {
         this.alertJson = alertJson;
         this.networkJson = networkJson;
         this.stateJson = stateJson;
+        this.incidentJson = incidentJson;
     }
 
     @Override
@@ -50,7 +59,7 @@ public class StreamBroadcaster implements AlertListener {
         }
         synchronized (recent) {
             recent.addLast(a);
-            while (recent.size() > RECENT_MAX) {
+            while (recent.size() > recentMax) {
                 recent.removeFirst();
             }
         }
@@ -59,9 +68,11 @@ public class StreamBroadcaster implements AlertListener {
     }
 
     public void addClient(SseClient c) {
-        if (c != null) {
-            clients.add(c);
+        if (c == null) {
+            return;
         }
+        clients.add(c);
+        emitOne(c, "hello", "{\"alertCount\":" + getAlertCount() + "}");
     }
 
     public void removeClient(SseClient c) {
@@ -77,6 +88,18 @@ public class StreamBroadcaster implements AlertListener {
         }
     }
 
+    public void clearRecentAlerts() {
+        synchronized (recent) {
+            recent.clear();
+        }
+    }
+
+    public int getAlertCount() {
+        synchronized (recent) {
+            return recent.size();
+        }
+    }
+
     public void broadcastState() {
         for (SseClient client : List.copyOf(clients)) {
             String username = client.ctx().sessionAttribute("username");
@@ -85,11 +108,21 @@ public class StreamBroadcaster implements AlertListener {
         }
     }
 
+    public void broadcastIncidents() {
+        String json;
+        try {
+            json = incidentJson.get();
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        emit("incidents", json);
+    }
+
     void requestNetwork() {
         long delay;
         synchronized (this) {
             long now = System.nanoTime();
-            long wait = lastNetworkAt + NETWORK_INTERVAL_NANOS - now;
+            long wait = lastNetworkAt + networkIntervalNanos - now;
             if (wait <= 0) {
                 lastNetworkAt = now;
                 delay = 0L;

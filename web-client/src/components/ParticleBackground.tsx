@@ -77,7 +77,7 @@ export function ParticleBackground({ reduced }: { reduced: boolean }) {
 
         context.beginPath();
         context.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-        context.fillStyle = `rgba(217, 160, 91, ${p.alpha})`;
+        context.fillStyle = `rgba(183, 243, 107, ${p.alpha})`;
         context.fill();
       });
       animationFrameId = requestAnimationFrame(animate);

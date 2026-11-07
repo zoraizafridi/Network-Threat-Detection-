@@ -8,8 +8,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Random;
+import pk.ooad.ntd.util.ConfigManager;
 
 public class BruteForceGenerator extends AttackGenerator {
+    private final int attempts = ConfigManager.getInstance().getInt("sim.brute.attempts", 15);
+    private final int port = ConfigManager.getInstance().getInt("sim.brute.port", 22);
+    private final int baseBytes = ConfigManager.getInstance().getInt("sim.brute.baseBytes", 120);
 
     @Override
     public List<NetworkEvent> generate(String src, String dst, Instant now, Random rnd) {
@@ -17,11 +21,9 @@ public class BruteForceGenerator extends AttackGenerator {
         Objects.requireNonNull(rnd, "rnd must not be null");
 
         List<NetworkEvent> events = new ArrayList<>();
-        int attempts = 15;
-        int port = 22;
 
         for (long id = 1; id <= attempts; id++) {
-            long bytes = 120L + rnd.nextInt(60);
+            long bytes = baseBytes + rnd.nextInt(Math.max(1, baseBytes / 2));
             events.add(new NetworkEvent(
                 id,
                 now.plusMillis((id - 1) * 50),
