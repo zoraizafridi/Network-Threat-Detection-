@@ -25,13 +25,14 @@ always with a text label. Text contrast at least 4.5:1, body 7:1.
 
 ## Type and spacing
 Text IBM Plex Sans (400, 600). Data IBM Plex Mono. Self-hosted. Scale 12, 13, 14, 16, 20, 28, 48, 72.
+Landing headlines only may use Newsreader roman, self-hosted. Portal pages stay on IBM Plex.
 Spacing multiples of 4 (4, 8, 12, 16, 24, 32, 48, 64, 96). Radius 0 or 4. 1px borders. No shadows.
 Sentence case. No em dash character anywhere in UI text, comments or docs.
 
 ## Still banned
-Any gradient, gradient text, grain or noise, glassmorphism, blur, glow, emoji, Inter, Space Grotesk,
+Any gradient text, grain or noise, glassmorphism, emoji, Inter, Space Grotesk,
 Instrument Serif, serif italic accents, Lucide or any icon set used everywhere, coloured left-border cards,
-three icon boxes in a row, a badge above a headline, shadcn or Tailwind default looks,
+three icon boxes in a row, shadcn or Tailwind default looks,
 sections that fade in on scroll, a beam or glow following the cursor, hover effects that fade
 (hover is an instant swap), inconsistent spacing, buzzword copy.
 Icons: drawn in code, 1.5px stroke, only for the four asset types. Everything else is text.
@@ -40,6 +41,7 @@ Icons: drawn in code, 1.5px stroke, only for the four asset types. Everything el
 Allowed: scroll-linked motion (pinned sections, scrubbed timelines, translate and scale driven by scroll
 position), route transitions (a solid panel wipes across, no fade), camera moves, state-change animation.
 Not allowed: fade-in on scroll, stagger-fade lists, hover fades, cursor-following effects, looping decoration.
+Landing exception: the hero may play one load timeline on the headline block, about 800ms, and one connection-drawing timeline on the network, about 1200ms. The landing hero holds a 3D drawing of the sample hosts and their real links, in sand and muted green, with one illustrated compromised host. A scrubbed timeline moves one signal along a real route, brings the camera closer, and draws the outer links, then continues through Detect, Score, Plan and Report. It is an illustration. Reduced motion shows the final state with a still camera. Landing headlines are sentence case in Newsreader. Mono kickers may be uppercase. The four moves are a ruled diagram, not cards. Enter portal moves that same network to fill the view, then a forest panel wipes for 600ms into role selection, or into the portal when a session already exists. The public landing does not mount the live network map, because that map needs a session. The public demonstration does not call the server.
 Easing: power3.out or expo.out only. No bounce, no elastic.
 Durations: route wipe 600ms, camera move 900ms, node colour change 300ms, compromise ring 600ms once,
 link to red 300ms, backbone draw-on 600ms, new alert row tint 800ms, number count 350ms.
@@ -50,19 +52,24 @@ One Lenis instance, driven from the GSAP ticker:
   gsap.ticker.lagSmoothing(0);
 Kill ScrollTriggers and tweens on unmount. Animate transform and opacity only, never layout properties.
 Lenis runs on the landing page only. Inside the portal use native scroll in panels, so tables stay usable.
+Add: “Motion off under prefers-reduced-motion.”
 
 ## React Bits rules
 Use a component only if it passes the banned list. Check each one before adding it.
 Likely fine: count-up numbers, decrypt or scramble text for IP addresses and hashes, a menu or dock built flat.
+Decrypt text is copied in the repo for data strings. It is not mounted on the landing.
 Likely not fine (violate the list): gradient text, aurora or beam or particle backgrounds, spotlight or glass cards,
 splash or trail cursors, blur text. Restyle to the tokens, or do not use it. Say which ones were used.
 
 ## Pages
 Landing (public, Lenis + GSAP):
- 1. Pinned hero: the 3D network, camera slowly dollying with scroll. One line of copy, one button: "Enter portal".
- 2. Four pinned steps, scrubbed by scroll: Detect, Score, Plan, Report. Each shows the real 3D map in that state.
- 3. A short factual strip: counts of detectors, attack types, tests passing. No marketing voice.
- 4. Footer with the course and group names.
+ 1. Asymmetric hero on flat forest. A ruled bar: Field station, Detect, Score, Plan, Report, and a text button, "Enter portal". Left column: mono label, a large left-aligned Newsreader headline with fixed line breaks, one factual line, Enter portal, and Explore the system. Centre: the sample network in 3D, about half the hero, sand links on forest, one illustrated compromised host, one signal. A short caption states that the loaded sample starts Normal. Right: hosts 18, links 21, detectors 4. One scrubbed timeline carries the signal and draws Detect, Score, Plan and Report. Lenis drives the scroll. Reduced motion shows the final drawing and a still network.
+ 2. A ruled process, not cards. Detect, Score, Plan, Report in four columns on desktop and stacked rows on a narrow screen. Each has a number, the same sentence as before, and one 1.5px diagram: detector gates, a 0 to 100 score, a backbone path, a report with status labels.
+  3. Inside the network, on sand. A forest console shows the sample router backbone, four servers and two workstations, with real names and addresses, plus the host fields for Database Server 1 at rest: Normal, risk 0 of 100, no alerts. The section says it is a sample preview, not a live session.
+  4. A public demonstration titled "One event. Then the response." The visitor picks a source host and a target host from the sample, then a local timeline shows the marker, the four detectors, an example risk reading, one hop chain of published sample links, and report lines. It does not call the server. The hop chain is not the planner result.
+  5. Closing headline "The network is ready." and Enter portal.
+  6. A short factual strip: counts of detectors and attack types.
+  7. Footer with the course name.
 Portal (after login, route /portal):
  Shell: forest sidebar with text navigation, sand main area, top bar with user, role, seed, simulation state.
  Routes:

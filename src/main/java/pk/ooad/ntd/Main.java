@@ -1,58 +1,54 @@
 package pk.ooad.ntd;
 
-import com.formdev.flatlaf.FlatLaf;
-import com.formdev.flatlaf.FlatLightLaf;
+import pk.ooad.ntd.domain.TopologyLoader;
 import pk.ooad.ntd.service.IncidentResponseFacade;
-import pk.ooad.ntd.ui.LoginFrame;
-
-import javax.swing.UIManager;
-import javax.swing.SwingUtilities;
-import java.awt.Font;
-import java.awt.GraphicsEnvironment;
-import java.io.IOException;
-import java.io.InputStream;
-import java.awt.FontFormatException;
+import pk.ooad.ntd.web.WebServer;
 
 public class Main {
     public static void main(String[] args) {
         boolean headless = false;
         boolean web = false;
-        for (String a : args) {
-            if (a.equals("--headless")) headless = true;
-            if (a.equals("--web")) web = true;
+        Integer port = null;
+        Long seed = null;
+        try {
+            for (int i = 0; i < args.length; i++) {
+                String arg = args[i];
+                if (arg.equals("--headless")) {
+                    headless = true;
+                } else if (arg.equals("--web")) {
+                    web = true;
+                } else if (arg.equals("--port")) {
+                    if (i + 1 >= args.length) {
+                        usage();
+                        return;
+                    }
+                    port = Integer.parseInt(args[++i]);
+                } else if (arg.equals("--seed")) {
+                    if (i + 1 >= args.length) {
+                        usage();
+                        return;
+                    }
+                    seed = Long.parseLong(args[++i]);
+                }
+            }
+        } catch (NumberFormatException ex) {
+            usage();
+            return;
         }
-        if (web) System.out.println("Web mode (to be built)");
-        else if (headless) System.out.println("Headless mode (to be built)");
-        else SwingUtilities.invokeLater(() -> {
-            configureLookAndFeel();
-            new LoginFrame(new IncidentResponseFacade()).setVisible(true);
-        });
+        if (web) {
+            int chosenPort = port == null ? 8080 : port;
+            long chosenSeed = seed == null ? 42L : seed;
+            IncidentResponseFacade facade = new IncidentResponseFacade(TopologyLoader.loadSample(), chosenSeed);
+            WebServer server = new WebServer(facade, chosenPort);
+            server.start(chosenPort);
+        } else if (headless) {
+            System.out.println("Headless mode (to be built)");
+        } else {
+            usage();
+        }
     }
 
-    private static void configureLookAndFeel() {
-        Font regular = loadFont("fonts/IBMPlexSans-Regular.ttf", Font.PLAIN);
-        Font semibold = loadFont("fonts/IBMPlexSans-SemiBold.ttf", Font.BOLD);
-        Font mono = loadFont("fonts/IBMPlexMono-Regular.ttf", Font.PLAIN);
-        FlatLaf.registerCustomDefaultsSource("pk.ooad.ntd.ui.theme");
-        FlatLightLaf.setup();
-
-        UIManager.put("defaultFont", regular);
-        UIManager.put("Label.font", regular);
-        UIManager.put("Button.font", semibold);
-        UIManager.put("TextField.font", regular);
-        UIManager.put("PasswordField.font", regular);
-        UIManager.put("TextArea.font", mono);
-    }
-
-    private static Font loadFont(String resource, int style) {
-        Font fallback = new Font(Font.SANS_SERIF, style, 14);
-        try (InputStream input = Main.class.getClassLoader().getResourceAsStream(resource)) {
-            if (input == null) return fallback;
-            Font font = Font.createFont(Font.TRUETYPE_FONT, input).deriveFont(style, 14f);
-            GraphicsEnvironment.getLocalGraphicsEnvironment().registerFont(font);
-            return font;
-        } catch (FontFormatException | IOException | RuntimeException exception) {
-            return fallback;
-        }
+    private static void usage() {
+        System.out.println("Usage: java -jar threat-detection.jar --web [--port N] [--seed N] | --headless");
     }
 }

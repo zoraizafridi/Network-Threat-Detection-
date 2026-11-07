@@ -5,3 +5,5 @@ target/
 out/
 events.log
 *.class
+web-client/node_modules
+web-client/dist

@@ -6,6 +6,7 @@ import pk.ooad.ntd.domain.Severity;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -37,6 +38,26 @@ public class Incident {
 
     public void close() {
         status = IncidentStatus.CLOSED;
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public String getSourceIp() {
+        return sourceIp;
+    }
+
+    public IncidentStatus getStatus() {
+        return status;
+    }
+
+    public Instant getOpenedAt() {
+        return openedAt;
+    }
+
+    public List<Alert> getAlerts() {
+        return Collections.unmodifiableList(new ArrayList<>(alerts));
     }
 
     String sourceIpValue() {
