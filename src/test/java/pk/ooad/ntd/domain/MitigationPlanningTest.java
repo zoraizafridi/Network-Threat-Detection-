@@ -54,36 +54,29 @@ class MitigationPlanningTest {
         MitigationTask manageableTask = new MitigationTask("t1", server, 100, 30, "FIREWALL_CONFIG");
         assertTrue(team.canHandle(manageableTask), "Team with skill, capacity, and availability can handle task");
 
-        // General task with no specific skill requirement
         MitigationTask noSkillTask = new MitigationTask("t2", server, 50, 15, "");
         assertTrue(team.canHandle(noSkillTask));
 
         MitigationTask nullSkillTask = new MitigationTask("t3", server, 50, 15, null);
         assertTrue(team.canHandle(nullSkillTask));
 
-        // Missing required skill
         MitigationTask unhandledSkillTask = new MitigationTask("t4", server, 80, 20, "REVERSE_ENGINEERING");
         assertFalse(team.canHandle(unhandledSkillTask), "Missing required skill must return false");
 
-        // Cost exceeds capacity
         MitigationTask tooCostlyTask = new MitigationTask("t5", server, 200, 50, "FIREWALL_CONFIG");
         assertFalse(team.canHandle(tooCostlyTask), "Cost exceeding capacity must return false");
 
-        // Team unavailable
         team.setAvailable(false);
         assertFalse(team.canHandle(manageableTask), "Unavailable team cannot handle any task");
 
-        // Null task
         assertFalse(team.canHandle(null), "Null task must return false");
 
-        // Team mutations
         team.setAvailable(true);
         team.setCapacity(100);
         team.addSkill("REVERSE_ENGINEERING");
         assertTrue(team.canHandle(unhandledSkillTask));
         assertTrue(team.canHandle(tooCostlyTask));
 
-        // Team equality and toString
         AnalystTeam sameTeam = new AnalystTeam("team-1", "Different Name", Set.of(), 10, false);
         assertEquals(team, sameTeam);
         assertEquals(team.hashCode(), sameTeam.hashCode());
@@ -116,7 +109,6 @@ class MitigationPlanningTest {
         assertEquals(2L, assignment.getStateCount());
         assertNotNull(assignment.toString());
 
-        // ResponsePlan composition
         ResponsePlan plan = new ResponsePlan(backbone, assignment);
         assertEquals(backbone, plan.getBackbone());
         assertEquals(assignment, plan.getAssignment());

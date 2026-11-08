@@ -45,14 +45,12 @@ class NetworkTest {
         assertEquals(1, serverLinks.size());
         assertEquals(l1, serverLinks.get(0));
 
-        // Compromised links check
         assertEquals(0, network.getCompromisedLinks().size());
         l1.markCompromised();
         List<Link> compromised = network.getCompromisedLinks();
         assertEquals(1, compromised.size());
         assertEquals(l1, compromised.get(0));
 
-        // Network connectivity
         assertTrue(network.isConnected());
     }
 

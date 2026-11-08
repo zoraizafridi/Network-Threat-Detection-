@@ -7,3 +7,24 @@ events.log
 *.class
 web-client/node_modules
 web-client/dist
+
+# Local portable toolchain and scratch space (never committed)
+.tools/
+build/
+
+# Runtime state: databases, drop-in data directory, generated exports
+data/
+evidence/
+*.db
+*.db-wal
+*.db-shm
+
+.qoder/
+.tools/
+data/
+evidence/
+target/
+node_modules/
+*.db
+!src/main/resources/samples/*.log
+!src/test/resources/samples/*.log

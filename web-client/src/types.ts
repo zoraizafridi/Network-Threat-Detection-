@@ -25,6 +25,25 @@ export interface IncidentRow {
   alerts: import("./alerts").FeedAlert[];
 }
 
+export interface FlowRow {
+  id: string;
+  srcIp: string;
+  dstIp: string;
+  srcPort: number;
+  dstPort: number;
+  protocol: string;
+  bytesOut: number;
+  bytesIn: number;
+  packets: number;
+  startTime: string;
+  endTime: string;
+  durationMs: number;
+  flags: string[];
+  label: string;
+  simulated: boolean;
+  ended: boolean;
+}
+
 export interface PlanTeam {
   team: string;
   tasks: string[];

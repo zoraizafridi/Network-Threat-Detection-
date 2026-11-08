@@ -376,6 +376,56 @@ class WebServerTest {
         assertEquals(400, call("GET", "/api/alerts?limit=-1", null).statusCode());
     }
 
+    @Test
+    void flowsAreRecordedWhileTheSimulatorRuns() throws Exception {
+        login("admin", "admin");
+        assertEquals(200, call("POST", "/api/sim/start", null).statusCode());
+        // The simulator only emits background traffic in auto mode.
+        assertEquals(200, call("POST", "/api/sim/auto", "{\"on\":true}").statusCode());
+        JsonNode rows = awaitFlows();
+        assertTrue(rows.size() > 0, "the flow table must fill while the simulator runs");
+        JsonNode flow = rows.get(0);
+        assertNotNull(flow.get("id"));
+        assertNotNull(flow.get("srcIp"));
+        assertNotNull(flow.get("dstIp"));
+        assertTrue(flow.get("srcPort").asInt() > 0);
+        assertTrue(flow.get("dstPort").asInt() > 0);
+        assertTrue(flow.get("bytesOut").asLong() > 0);
+        assertTrue(flow.get("packets").asLong() > 0);
+        assertFalse(flow.get("startTime").asText().isBlank());
+        assertFalse(flow.get("label").asText().isBlank());
+    }
+
+    @Test
+    void flowFiltersAreValidated() throws Exception {
+        login("admin", "admin");
+        assertEquals(400, call("GET", "/api/flows?port=abc", null).statusCode());
+        assertEquals(400, call("GET", "/api/flows?port=70000", null).statusCode());
+        assertEquals(400, call("GET", "/api/flows?limit=-1", null).statusCode());
+        assertEquals(400, call("GET", "/api/flows?from=not-a-time", null).statusCode());
+        assertEquals(200, call("GET", "/api/flows?limit=5", null).statusCode());
+        assertEquals(200, call("GET", "/api/flows?src=10.0.0.5&dst=10.0.0.9&port=80", null).statusCode());
+    }
+
+    @Test
+    void viewerMayReadFlows() throws Exception {
+        login("viewer", "viewer");
+        assertEquals(200, call("GET", "/api/flows", null).statusCode());
+    }
+
+    private JsonNode awaitFlows() throws Exception {
+        long deadline = System.currentTimeMillis() + 5000;
+        JsonNode body = mapper.createArrayNode();
+        while (System.currentTimeMillis() < deadline) {
+            body = mapper.readTree(call("GET", "/api/flows?limit=20", null).body());
+            if (body.isArray() && body.size() > 0) {
+                return body;
+            }
+            Thread.sleep(25);
+        }
+        return body;
+    }
+
     private JsonNode awaitAlert(String attackType) throws Exception {
         long deadline = System.currentTimeMillis() + 5000;
         while (System.currentTimeMillis() < deadline) {

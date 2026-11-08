@@ -3,7 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { navEntries, type NavEntry } from "../permissions";
 
 const GROUPS: { title: string; labels: string[] }[] = [
-  { title: "Monitoring", labels: ["Overview", "Alerts", "Incidents", "Hosts"] },
+  { title: "Monitoring", labels: ["Overview", "Alerts", "Flows", "Incidents", "Hosts"] },
   { title: "Operations", labels: ["Attack lab", "Planner", "Reports"] },
   { title: "System", labels: ["Control", "Admin"] },
 ];
@@ -16,6 +16,7 @@ function NavIcon({ name }: { name: string }) {
       {name === "Overview" ? <path d="M4 10.5 12 4l8 6.5V20H4Z" {...stroke} /> : null}
       {name === "Alerts" ? <path d="M6 9a6 6 0 1 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 13 6 9ZM10 18a2 2 0 0 0 4 0" {...stroke} /> : null}
       {name === "Incidents" ? <path d="M12 4 3 19h18L12 4Zm0 6v4m0 2.5h.01" {...stroke} /> : null}
+      {name === "Flows" ? <><circle cx="5" cy="7" r="1.8" {...stroke} /><circle cx="19" cy="17" r="1.8" {...stroke} /><path d="M6.6 8.1 17.4 15.9" {...stroke} /></> : null}
       {name === "Hosts" ? <><rect x="4" y="5" width="16" height="5" {...stroke} /><rect x="4" y="14" width="16" height="5" {...stroke} /></> : null}
       {name === "Attack lab" ? <><circle cx="12" cy="12" r="7" {...stroke} /><path d="M12 9v3l2 2" {...stroke} /></> : null}
       {name === "Planner" ? <path d="M8 6h11M8 12h11M8 18h11M5 6h.01M5 12h.01M5 18h.01" {...stroke} /> : null}

@@ -11,6 +11,7 @@ const Shell = lazy(() => import("./pages/Shell").then((module) => ({ default: mo
 const Overview = lazy(() => import("./pages/Overview").then((module) => ({ default: module.Overview })));
 const AttackLab = lazy(() => import("./pages/AttackLab").then((module) => ({ default: module.AttackLab })));
 const AlertsPage = lazy(() => import("./pages/Alerts").then((module) => ({ default: module.AlertsPage })));
+const FlowsPage = lazy(() => import("./pages/Flows").then((module) => ({ default: module.FlowsPage })));
 const IncidentsPage = lazy(() => import("./pages/Incidents").then((module) => ({ default: module.IncidentsPage })));
 const HostsPage = lazy(() => import("./pages/Hosts").then((module) => ({ default: module.HostsPage })));
 const HostDetail = lazy(() => import("./pages/Hosts").then((module) => ({ default: module.HostDetail })));
@@ -107,9 +108,9 @@ export function AppRoutes({ location }: { location?: Location }) {
       <Route path="/login" element={<Login />} />
       <Route path="/portal" element={<Shell />}>
         <Route index element={<Overview />} />
-        <Route path="overview" element={<Navigate to="/portal" replace />} />
         <Route path="attack" element={<AttackLab />} />
         <Route path="alerts" element={<AlertsPage />} />
+        <Route path="flows" element={<FlowsPage />} />
         <Route path="incidents" element={<IncidentsPage />} />
         <Route path="hosts" element={<HostsPage />} />
         <Route path="hosts/:id" element={<HostDetail />} />
@@ -119,6 +120,10 @@ export function AppRoutes({ location }: { location?: Location }) {
         <Route path="admin" element={<AdminPage />} />
         <Route path="*" element={<PortalNotFound />} />
       </Route>
+      {/* Legacy address. Kept outside the portal subtree so the redirect does not
+          run inside the lazily loaded Shell, where the Suspense retry would
+          swallow the Navigate effect and leave the old URL in place. */}
+      <Route path="/portal/overview" element={<Navigate to="/portal" replace />} />
     </Routes>
   );
 }

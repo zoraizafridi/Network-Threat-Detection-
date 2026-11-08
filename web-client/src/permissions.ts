@@ -23,6 +23,7 @@ const ENTRIES: { label: string; to: string; allow: (role: string) => boolean }[]
   { label: "Overview", to: "/portal", allow: () => true },
   { label: "Attack lab", to: "/portal/attack", allow: canLaunchAttack },
   { label: "Alerts", to: "/portal/alerts", allow: () => true },
+  { label: "Flows", to: "/portal/flows", allow: () => true },
   { label: "Incidents", to: "/portal/incidents", allow: () => true },
   { label: "Hosts", to: "/portal/hosts", allow: () => true },
   { label: "Planner", to: "/portal/planner", allow: canRunPlanner },

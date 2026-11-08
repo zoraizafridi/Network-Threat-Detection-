@@ -1,4 +1,5 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { Suspense } from "react";
 import { MemoryRouter, Outlet, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRoutes } from "../src/App";
@@ -41,7 +42,13 @@ function mount(path: string) {
     }) as MediaQueryList;
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <AppRoutes />
+      {/* AppRoutes renders lazy page components; App always mounts it inside a
+          Suspense boundary (see RouteStage). Mounting it bare here made the
+          first navigation to a lazy route suspend with no fallback, which is
+          why the redirect assertion could never settle. */}
+      <Suspense fallback={<p>loading</p>}>
+        <AppRoutes />
+      </Suspense>
       <PathProbe />
     </MemoryRouter>,
   );
@@ -52,7 +59,10 @@ describe("portal routing", () => {
 
   test("the legacy overview address redirects to the portal index", async () => {
     mount("/portal/overview");
-    await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/portal"));
+    // The redirect lives in a lazily loaded route tree, so the lazy import plus the
+    // Navigate effect has to settle. Give that a real budget: with the whole suite
+    // running in parallel the import can take well over the 1s default.
+    await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/portal"), { timeout: 5000 });
   });
 
   test("unknown portal addresses render the not found page", async () => {

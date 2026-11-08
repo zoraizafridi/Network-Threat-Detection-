@@ -1,6 +1,6 @@
 import type { FeedAlert } from "./alerts";
 import { useApp } from "./store";
-import type { Asset, IncidentRow, NetLink, PlanBody, SocTeam } from "./types";
+import type { Asset, FlowRow, IncidentRow, NetLink, PlanBody, SocTeam } from "./types";
 
 export class HttpStatusError extends Error {
   status: number;
@@ -85,6 +85,172 @@ export async function loadAlerts(): Promise<void> {
 export async function loadIncidents(): Promise<void> {
   const body = await readJson<IncidentRow[]>("/api/incidents");
   useApp.getState().setIncidents(body);
+}
+
+/** Connection records. They are polled rather than streamed, so no store write. */
+export async function loadFlows(limit = 500): Promise<FlowRow[]> {
+  return readJson<FlowRow[]>(`/api/flows?limit=${limit}`);
+}
+
+/**
+ * Records that outlived the in-memory ring because they reached the durable
+ * store. The server answers 503 when the store is off, so callers must treat
+ * that status as "not configured" rather than "nothing recorded".
+ */
+export async function loadFlowHistory(limit = 500): Promise<FlowRow[]> {
+  return readJson<FlowRow[]>(`/api/flows/history?limit=${limit}`);
+}
+
+export interface MlStatus {
+  enabled: boolean;
+  modelState: string;
+  samples: number;
+  clusters: number;
+  threshold: number;
+  lastTrainedAt: string;
+  scored: number;
+  anomalies: number;
+  alerts: number;
+  lastError: string;
+}
+
+export async function loadMlStatus(): Promise<MlStatus> {
+  return readJson<MlStatus>("/api/ml/status");
+}
+
+export interface CorrelationStatus {
+  enabled: boolean;
+  trackedSources: number;
+  signals: number;
+  correlated: number;
+  minSignals: number;
+  windowSeconds: number;
+}
+
+export async function loadCorrelationStatus(): Promise<CorrelationStatus> {
+  return readJson<CorrelationStatus>("/api/correlation/status");
+}
+
+export interface ContainmentAction {
+  ip: string;
+  blockedAt: string;
+  expiresAt: string;
+  reason: string;
+  actor: string;
+  automatic: boolean;
+}
+
+export interface ContainmentBody {
+  enabled: boolean;
+  auto: boolean;
+  enforce: boolean;
+  blocked: ContainmentAction[];
+  droppedEvents: number;
+  automaticActions: number;
+  expiredActions: number;
+}
+
+export async function loadContainment(): Promise<ContainmentBody> {
+  return readJson<ContainmentBody>("/api/containment");
+}
+
+export async function containSource(ip: string, minutes: number, reason: string): Promise<void> {
+  await request("/api/containment", {
+    method: "POST",
+    body: JSON.stringify({ ip, minutes, reason }),
+  });
+}
+
+export async function releaseSource(ip: string): Promise<void> {
+  await request("/api/containment/release", {
+    method: "POST",
+    body: JSON.stringify({ ip }),
+  });
+}
+
+export interface NotificationRow {
+  id: string;
+  timestamp: string;
+  severity: string;
+  attackType: string;
+  sourceIp: string;
+  targetIp: string;
+  summary: string;
+  channel: string;
+}
+
+export interface NotificationsBody {
+  enabled: boolean;
+  minimumSeverity: string;
+  webhookConfigured: boolean;
+  recorded: number;
+  webhookSent: number;
+  webhookFailed: number;
+  dropped: number;
+  lastError: string;
+  notifications: NotificationRow[];
+}
+
+export async function loadNotifications(limit = 20): Promise<NotificationsBody> {
+  return readJson<NotificationsBody>(`/api/notifications?limit=${limit}`);
+}
+
+export interface ComplianceBody {
+  storeEnabled: boolean;
+  databasePath: string;
+  storedFlows: number;
+  storedAlerts: number;
+  droppedRows: number;
+  retentionMinutes: number;
+  sweepMinutes: number;
+  retentionCutoff: string;
+  auditCapacity: number;
+  auditRecords: number;
+  auditDenied: number;
+  auditFailed: number;
+  notificationsEnabled: boolean;
+  notificationBacklog: number;
+  containmentEnabled: boolean;
+  containedSources: number;
+  forensicsEnabled: boolean;
+  evidenceDirectory: string;
+}
+
+export async function loadCompliance(): Promise<ComplianceBody> {
+  return readJson<ComplianceBody>("/api/compliance/summary");
+}
+
+export interface AuditRow {
+  sequence: number;
+  timestamp: string;
+  actor: string;
+  action: string;
+  target: string;
+  outcome: string;
+  detail: string;
+}
+
+export interface AuditBody {
+  entries: AuditRow[];
+  denied: number;
+  failed: number;
+  capacity: number;
+}
+
+export async function loadAudit(limit = 20): Promise<AuditBody> {
+  return readJson<AuditBody>(`/api/audit?limit=${limit}`);
+}
+
+export interface EvidenceBundle {
+  directory: string;
+  createdAt: string;
+  files: number;
+  bytes: number;
+  manifestSha256: string;
+}
+
+export async function exportEvidence(): Promise<EvidenceBundle> {
+  return readJson<EvidenceBundle>("/api/forensics/export", { method: "POST" });
 }
 
 export async function runPlan(input?: { excludedHostIds: string[]; teamCapacities: SocTeam[] }): Promise<PlanBody> {

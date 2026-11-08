@@ -17,7 +17,6 @@ class RunningStatsTest {
         assertEquals(0.0, stats.getM2());
         assertEquals(0.0, stats.getStdDev());
 
-        // Single value
         stats.update(10.0);
         assertEquals(1, stats.getCount());
         assertEquals(10.0, stats.getMean());
@@ -44,15 +43,12 @@ class RunningStatsTest {
     void testZScoreWhenStdDevIsZero() {
         RunningStats stats = new RunningStats();
 
-        // Count = 0
         assertEquals(0.0, stats.zScore(100.0), "zScore must be 0 when empty");
 
-        // Count = 1 (stdDev = 0)
         stats.update(50.0);
         assertEquals(0.0, stats.zScore(50.0));
         assertEquals(0.0, stats.zScore(100.0), "zScore must be 0 when stdDev is 0");
 
-        // Identical values (stdDev = 0)
         stats.update(50.0);
         stats.update(50.0);
         assertEquals(0.0, stats.getStdDev());

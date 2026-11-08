@@ -60,7 +60,6 @@ class NetworkAssetTest {
         server.addRisk(-15.0);
         assertEquals(0.0, server.getRiskScore(), "Risk score must not go below 0");
 
-        // Normal addition
         server.addRisk(40.0);
         assertEquals(40.0, server.getRiskScore());
 
@@ -72,7 +71,6 @@ class NetworkAssetTest {
         server.addRisk(50.0);
         assertEquals(100.0, server.getRiskScore(), "Risk score must remain at 100");
 
-        // Partial reduction
         server.addRisk(-30.0);
         assertEquals(70.0, server.getRiskScore());
 
@@ -80,7 +78,6 @@ class NetworkAssetTest {
         server.addRisk(-120.0);
         assertEquals(0.0, server.getRiskScore(), "Risk score must clamp at 0 on large negative delta");
 
-        // resetRisk resets to 0
         server.addRisk(85.0);
         assertEquals(85.0, server.getRiskScore());
         server.resetRisk();

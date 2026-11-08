@@ -25,6 +25,12 @@ public class Dtos {
                               List<AlertDto> alerts) {
     }
 
+    public record FlowDto(String id, String srcIp, String dstIp, int srcPort, int dstPort,
+                          String protocol, long bytesOut, long bytesIn, long packets,
+                          String startTime, String endTime, long durationMs, List<String> flags,
+                          String label, boolean simulated, boolean ended) {
+    }
+
     public record PlanDto(Map<String, Object> backbone, Map<String, Object> assignment) {
     }
 

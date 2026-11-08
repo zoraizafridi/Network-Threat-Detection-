@@ -1,12 +1,26 @@
 package pk.ooad.ntd.service;
 
+import pk.ooad.ntd.compliance.ComplianceService;
+import pk.ooad.ntd.containment.ContainmentService;
+import pk.ooad.ntd.correlation.SiemCorrelator;
 import pk.ooad.ntd.detection.AlertBus;
 import pk.ooad.ntd.detection.AlertListener;
+import pk.ooad.ntd.detection.AlertQualityGate;
 import pk.ooad.ntd.detection.DetectionEngine;
 import pk.ooad.ntd.detection.Detector;
 import pk.ooad.ntd.detection.DetectorFactory;
+import pk.ooad.ntd.flows.FlowQuery;
+import pk.ooad.ntd.flows.FlowRecord;
+import pk.ooad.ntd.flows.FlowRecorder;
+import pk.ooad.ntd.forensics.EvidenceExporter;
+import pk.ooad.ntd.ml.MlFlowScorer;
+import pk.ooad.ntd.notify.NotificationService;
+import pk.ooad.ntd.persistence.AlertRecord;
+import pk.ooad.ntd.persistence.PersistenceService;
+import pk.ooad.ntd.security.AuditLog;
 import pk.ooad.ntd.domain.Admin;
 import pk.ooad.ntd.domain.AnalystTeam;
+import pk.ooad.ntd.domain.Alert;
 import pk.ooad.ntd.domain.SecurityAnalyst;
 import pk.ooad.ntd.domain.Viewer;
 import pk.ooad.ntd.domain.AssetStatus;
@@ -36,6 +50,16 @@ public class IncidentResponseFacade {
     private final TrafficSimulator trafficSimulator;
     private final DetectionEngine detectionEngine;
     private final AlertBus alertBus;
+    private final FlowRecorder flowRecorder;
+    private final MlFlowScorer mlFlowScorer;
+    private final PersistenceService persistenceService;
+    private final AuditLog auditLog;
+    private final AlertQualityGate alertQualityGate;
+    private final SiemCorrelator siemCorrelator;
+    private final ContainmentService containmentService;
+    private final NotificationService notificationService;
+    private final EvidenceExporter evidenceExporter;
+    private final ComplianceService complianceService;
     private final RiskScorer riskScorer;
     private final IncidentManager incidentManager;
     private final SOC soc;
@@ -73,6 +97,20 @@ public class IncidentResponseFacade {
         detectionEngine = new DetectionEngine(trafficSimulator.getEventQueue(), alertBus,
                 ConfigManager.getInstance().getInt("detection.cooldownSeconds", 5));
         for (Detector detector : new DetectorFactory().createAll()) detectionEngine.addDetector(detector);
+        for (Detector detector : new DetectorFactory().createNdr()) detectionEngine.addDetector(detector);
+        alertQualityGate = new AlertQualityGate();
+        detectionEngine.setAlertGate(alertQualityGate);
+        flowRecorder = new FlowRecorder();
+        detectionEngine.addEventObserver(flowRecorder);
+        mlFlowScorer = new MlFlowScorer(alertBus, alertQualityGate);
+        flowRecorder.addCloseListener(mlFlowScorer::onFlow);
+        persistenceService = new PersistenceService();
+        flowRecorder.addCloseListener(persistenceService::recordFlow);
+        auditLog = new AuditLog();
+        siemCorrelator = new SiemCorrelator(alertBus);
+        containmentService = new ContainmentService();
+        detectionEngine.setAdmission(containmentService::admit);
+        notificationService = new NotificationService();
         riskScorer = new RiskScorer(network);
         incidentManager = new IncidentManager();
         soc = new SOC(detectionEngine);
@@ -89,9 +127,16 @@ public class IncidentResponseFacade {
         backbonePlanner = new BackbonePlanner();
         assignmentPlanner = new AssignmentPlanner();
         reportGenerator = new ReportGenerator();
+        evidenceExporter = new EvidenceExporter(ConfigManager.getInstance());
+        complianceService = new ComplianceService(persistenceService, auditLog,
+                notificationService, containmentService, evidenceExporter, ConfigManager.getInstance());
         alertBus.subscribe(riskScorer);
         alertBus.subscribe(new AlertLogger());
         alertBus.subscribe(incidentManager);
+        alertBus.subscribe(persistenceService);
+        alertBus.subscribe(siemCorrelator);
+        alertBus.subscribe(containmentService);
+        alertBus.subscribe(notificationService);
     }
 
     public User login(String u, String p) {
@@ -113,10 +158,27 @@ public class IncidentResponseFacade {
         detectionEngine.stop();
     }
 
+    /**
+     * Stops the pipeline and lets the durable store finish. Flows still open at
+     * this point are closed first, so the last few connections are stored
+     * instead of vanishing with the process.
+     */
+    public void shutdown() {
+        stop();
+        flowRecorder.closeAllOpen();
+        mlFlowScorer.close();
+        persistenceService.close();
+    }
+
     public void reset() {
         stop();
         trafficSimulator.reset();
         detectionEngine.reset();
+        flowRecorder.reset();
+        mlFlowScorer.reset();
+        siemCorrelator.reset();
+        containmentService.reset();
+        notificationService.reset();
         incidentManager.reset();
         riskScorer.reset();
         lastResponsePlan = null;
@@ -255,5 +317,79 @@ public class IncidentResponseFacade {
 
     public List<Incident> getIncidents() {
         return incidentManager.getIncidents();
+    }
+
+    public FlowRecorder getFlowRecorder() {
+        return flowRecorder;
+    }
+
+    public MlFlowScorer getMlFlowScorer() {
+        return mlFlowScorer;
+    }
+
+    public PersistenceService getPersistenceService() {
+        return persistenceService;
+    }
+
+    public AuditLog getAuditLog() {
+        return auditLog;
+    }
+
+    public AlertQualityGate getAlertQualityGate() {
+        return alertQualityGate;
+    }
+
+    public SiemCorrelator getSiemCorrelator() {
+        return siemCorrelator;
+    }
+
+    public ContainmentService getContainmentService() {
+        return containmentService;
+    }
+
+    public NotificationService getNotificationService() {
+        return notificationService;
+    }
+
+    public EvidenceExporter getEvidenceExporter() {
+        return evidenceExporter;
+    }
+
+    public ComplianceService getComplianceService() {
+        return complianceService;
+    }
+
+    /**
+     * Writes an evidence bundle from live and stored state. Stored rows are
+     * preferred because they are the records the store still holds; when the
+     * store is off the live ring is exported instead, and the manifest says so
+     * by carrying the counts it actually wrote.
+     */
+    public EvidenceExporter.Bundle exportEvidence(String actor, List<Alert> liveAlerts) {
+        int maxFlows = ConfigManager.getInstance().getInt("forensics.maxFlows", 5000);
+        int maxAlerts = ConfigManager.getInstance().getInt("forensics.maxAlerts", 5000);
+        List<FlowRecord> flows;
+        try {
+            flows = persistenceService.isEnabled()
+                    ? persistenceService.storedFlows(maxFlows)
+                    : flowRecorder.query(FlowQuery.all(maxFlows));
+        } catch (RuntimeException ex) {
+            flows = flowRecorder.query(FlowQuery.all(maxFlows));
+        }
+        List<AlertRecord> alerts = new ArrayList<>();
+        if (liveAlerts != null) {
+            for (Alert alert : liveAlerts) {
+                alerts.add(AlertRecord.from(alert));
+            }
+        }
+        if (alerts.isEmpty()) {
+            try {
+                alerts = persistenceService.storedAlerts(maxAlerts);
+            } catch (RuntimeException ignored) {
+                alerts = List.of();
+            }
+        }
+        int auditCap = ConfigManager.getInstance().getInt("audit.maxRecords", 2000);
+        return evidenceExporter.export(actor, flows, alerts, auditLog.recent(auditCap), getIncidents());
     }
 }

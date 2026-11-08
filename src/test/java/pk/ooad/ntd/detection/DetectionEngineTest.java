@@ -98,10 +98,8 @@ class DetectionEngineTest {
                 }
             }
 
-            // Inject attack into simulator
             sim.injectAttack(attackType, srcIp, dstIp);
 
-            // Transfer generated attack events from simulator queue to engine queue
             BlockingQueue<NetworkEvent> simQueue = sim.getEventQueue();
             while (!simQueue.isEmpty()) {
                 NetworkEvent e = simQueue.poll();

@@ -57,7 +57,6 @@ class UserTest {
         assertFalse(userWithHash.checkPassword(null), "Null password must return false");
         assertFalse(userWithHash.checkPassword(""), "Empty password must return false");
 
-        // Plaintext fallback
         Viewer plainUser = new Viewer("bob", "plainP@ss");
         assertTrue(plainUser.checkPassword("plainP@ss"), "Direct password match supported");
         assertFalse(plainUser.checkPassword("other"), "Wrong password must return false");

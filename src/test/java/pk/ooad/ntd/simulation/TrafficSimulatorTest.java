@@ -156,7 +156,6 @@ class TrafficSimulatorTest {
         sim.stop();
         assertFalse(sim.isRunning());
 
-        // Reset clears queue and ground truth
         sim.injectAttack(AttackType.PORT_SCAN, "1.1.1.1", "2.2.2.2");
         assertFalse(sim.getEventQueue().isEmpty());
         assertFalse(sim.getGroundTruth().isEmpty());

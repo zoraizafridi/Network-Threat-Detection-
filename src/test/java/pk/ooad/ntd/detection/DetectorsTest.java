@@ -29,21 +29,17 @@ class DetectorsTest {
     void testSignatureDetector() {
         SignatureDetector detector = new SignatureDetector();
 
-        // Normal event raises NO alert
         NetworkEvent normal = new NetworkEvent(1L, baseTime, "10.0.0.1", "10.0.0.2", 80, 500L, EventType.REQUEST, true, "NORMAL_PAYLOAD");
         assertTrue(detector.analyze(normal).isEmpty(), "Normal event must not trigger signature alert");
 
-        // Bad IP
         NetworkEvent badIpEvent = new NetworkEvent(2L, baseTime, "198.51.100.4", "10.0.0.2", 80, 500L, EventType.REQUEST, true, "GET /");
         Optional<Alert> alertIp = detector.analyze(badIpEvent);
         assertTrue(alertIp.isPresent(), "Bad IP must trigger signature alert");
 
-        // Bad Port
         NetworkEvent badPortEvent = new NetworkEvent(3L, baseTime, "10.0.0.1", "10.0.0.2", 31337, 500L, EventType.REQUEST, true, "GET /");
         Optional<Alert> alertPort = detector.analyze(badPortEvent);
         assertTrue(alertPort.isPresent(), "Bad port must trigger signature alert");
 
-        // Payload match
         NetworkEvent floodEvent = new NetworkEvent(4L, baseTime, "10.0.0.1", "10.0.0.2", 80, 500L, EventType.REQUEST, true, "DOS_FLOOD_PAYLOAD");
         Optional<Alert> alertFlood = detector.analyze(floodEvent);
         assertTrue(alertFlood.isPresent());
@@ -57,13 +53,11 @@ class DetectorsTest {
     void testRateThresholdDetector() {
         RateThresholdDetector detector = new RateThresholdDetector("RateThresholdDetector", 60, 3);
 
-        // Normal events raise NO alert
         for (int i = 0; i < 10; i++) {
             NetworkEvent normal = new NetworkEvent(i, baseTime.plusSeconds(i), "10.0.0.1", "10.0.0.2", 80, 500L, EventType.REQUEST, true, "OK");
             assertTrue(detector.analyze(normal).isEmpty());
         }
 
-        // Successful logins do not trigger alert
         for (int i = 0; i < 5; i++) {
             NetworkEvent successLogin = new NetworkEvent(100 + i, baseTime.plusSeconds(i), "10.0.0.1", "10.0.0.2", 22, 100L, EventType.LOGIN_ATTEMPT, true, "LOGIN_OK");
             assertTrue(detector.analyze(successLogin).isEmpty());
@@ -81,7 +75,6 @@ class DetectorsTest {
         assertTrue(alert.isPresent(), "Failed logins exceeding maxFailures must trigger alert");
         assertEquals(AttackType.BRUTE_FORCE, alert.get().getAttackType());
 
-        // reset() clears state
         detector.reset();
         assertEquals(0, detector.getFailuresBySource().size());
         assertTrue(detector.analyze(fourthFail).isEmpty(), "After reset, state must be cleared and under threshold");
@@ -109,7 +102,6 @@ class DetectorsTest {
         assertTrue(alert.isPresent(), "Scanning 4 distinct ports when max is 3 must raise alert");
         assertEquals(AttackType.PORT_SCAN, alert.get().getAttackType());
 
-        // reset() clears touches
         detector.reset();
         assertEquals(0, detector.getTouches().size());
     }

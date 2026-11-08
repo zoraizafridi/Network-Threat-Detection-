@@ -1,0 +1,12 @@
+# Offline threat feed used when intel.enabled=true.
+#
+# Format: <ipv4 address or CIDR> <label> [LOW|HIGH|CRITICAL]
+# '#' starts a comment. Only IPv4 is matched; IPv6 lines are skipped and counted.
+#
+# The shipped entries are the RFC 5737 documentation ranges on purpose. They
+# never appear in the simulated topology, so enabling the detector out of the box
+# adds capability without adding alerts. Point intel.feed at a real feed to use
+# it in anger.
+203.0.113.0/24  doc-scanner-net  HIGH
+198.51.100.7    doc-known-c2     CRITICAL
+192.0.2.0/24    doc-recon        LOW

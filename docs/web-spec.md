@@ -78,13 +78,27 @@ Portal (after login, route /portal):
    animate, see the alerts the detectors raise, see the risk change. Presets: port scan, brute force, DoS flood,
    data transfer, and a staged "multi-stage attack" that runs three in sequence.
   Alerts: filter by severity, type, source, target. Click a row to focus the host on the map.
+  Flows: connection records from GET /api/flows, polled every 3 seconds while the page is open. Text,
+   label and protocol filters, sortable start, bytes, packets and duration columns, a label tally and a
+   pause control that stops the polling and keeps the rows. The panel states that bytes in stay at zero
+   because the simulator only emits one direction. A Live and a Stored switch selects the source: Live
+   reads GET /api/flows from the recorder's memory, Stored reads GET /api/flows/history. Stored is only
+   offered when the status endpoint says the durable store is on; while it is off the switch explains
+   why and the request would answer 503.
   Incidents: list with status, grouped alerts, timeline of one incident.
   Hosts: table and detail page with risk history chart, recent alerts, tasks assigned.
   Planner: run response; backbone drawn on the 3D map; assignment table by team; excluded tasks; state count.
    Algorithm trace (phase 2): step through Kruskal edge by edge, and show the DP result.
    What-if: remove the two highest risk hosts and rerun, compare before and after.
   Reports: preview, export as text.
-  Admin (Admin role only): detector thresholds (read first, edit in phase 2), users (phase 2), event log viewer.
+  Admin (Admin role only): the operations panel plus the event log viewer. The panel is one ruled
+   list, not cards: the flow store (rows, queued, dropped, last flush), the model (state cold, ready or
+   disabled, samples, clusters, threshold), correlation (rule and counters), containment (blocked
+   sources, order and release, disabled controls greyed with the reason), notifications (outbox and
+   whether a webhook is configured), compliance (the component summary and the retention cutoff),
+   the audit trail (newest first, denied and failed counts) and the evidence export button. Every
+   reading shows the real state, so an unconfigured capability reads "disabled" instead of a zero
+   that looks like a measurement. A 409 answer is shown as the reason, never swallowed.
  Role gating mirrors the backend. Viewer cannot launch attacks or run the planner.
 
 ## 3D map
@@ -100,13 +114,29 @@ Use InstancedMesh above 50 nodes. Cap at 60 fps. Pause rendering when the tab is
 Every 3D element also exists as text in the side panel, so the screen is usable without it.
 
 ## API (server, package web)
+Monitoring endpoints added after the baseline (all default off, so "off" is a 503 or a 409 with a reason,
+never a fake zero). Nowhere does the client recompute what the server decides.
 POST /api/login {username, password} returns {role}. The facade holds a single current user, so this is a
 single-session demo. GET /api/network returns assets and links. POST /api/sim/start, /stop, /reset, /auto {on}.
 POST /api/attacks {type, src, dst}. GET /api/alerts, GET /api/incidents.
+GET /api/flows?src&dst&port&from&to&limit returns connection records newest first. Every authenticated
+role may read it, filters are validated with 400 on malformed values, and the row count is capped by
+flow.api.max. It is not pushed over SSE because it is polled.
+GET /api/flows/history?limit returns stored flows newest first and 503 while the store is off.
+GET /api/persistence/status returns rows, queued, dropped, written, last flush and last error (Admin).
+GET /api/alert-quality returns the gate rule and its counters.
+GET /api/ml/status returns the model state, samples, clusters, threshold and last training time.
+GET /api/correlation/status returns the rule, the signal count and the escalations.
+GET /api/containment returns the actions; POST /api/containment {ip, minutes, reason} orders one and
+POST /api/containment/release {ip} lifts one. Both writes are Admin only and both are audited.
+GET /api/notifications?limit returns the outbox and whether a webhook is configured.
+GET /api/compliance/summary returns one record for every owning component (Admin).
+POST /api/forensics/export writes an evidence bundle and returns its directory, file count, bytes and
+manifest digest (Admin).
+GET /api/audit?limit returns the trail with the denied and failed counts (Admin).
 GET /api/stream is Server-Sent Events: alert, asset and link changes, tick. A StreamBroadcaster implements AlertListener
 and is subscribed through facade.addAlertListener (this keeps the Observer pattern).
 POST /api/response/run returns the plan. GET /api/report returns text.
-Phase 2 (spec change, needs a class-spec edit first): GET /api/response/trace, GET and PUT /api/config, GET /api/users.
 All logic stays in Java. The client never recomputes detection, risk, Kruskal or DP.
 
 ## Quality bar

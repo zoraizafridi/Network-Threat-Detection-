@@ -42,12 +42,10 @@ class AlertBusAndFactoryTest {
         assertTrue(failingListenerRan.get(), "Failing listener must have executed");
         assertEquals(2, received.size(), "Both good listeners must have received the alert despite exception in bad listener");
 
-        // Unsubscribe
         bus.unsubscribe(goodListener1);
         bus.publish(alert);
         assertEquals(3, received.size(), "Only goodListener2 should receive after goodListener1 unsubscribed");
 
-        // Null publish safe
         bus.publish(null);
     }
 

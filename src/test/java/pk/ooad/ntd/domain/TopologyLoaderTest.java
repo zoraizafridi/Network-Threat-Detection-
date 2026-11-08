@@ -97,58 +97,49 @@ class TopologyLoaderTest {
     @Test
     @DisplayName("loadFromFile: Negative cases for missing file and invalid path")
     void testLoadFromFileMissing(@TempDir Path tempDir) {
-        // Missing file
         assertThrows(IllegalArgumentException.class, () ->
             TopologyLoader.loadFromFile(tempDir.resolve("non_existent.txt").toString())
         );
 
-        // Null or blank path
         assertThrows(IllegalArgumentException.class, () -> TopologyLoader.loadFromFile(null));
         assertThrows(IllegalArgumentException.class, () -> TopologyLoader.loadFromFile("   "));
 
-        // Path is a directory
         assertThrows(IllegalArgumentException.class, () -> TopologyLoader.loadFromFile(tempDir.toString()));
     }
 
     @Test
     @DisplayName("loadFromFile: Malformed files throw clear IllegalArgumentException")
     void testLoadFromFileMalformed(@TempDir Path tempDir) throws IOException {
-        // Empty file
         Path emptyFile = tempDir.resolve("empty.txt");
         Files.writeString(emptyFile, "# only comments\n\n");
         assertThrows(IllegalArgumentException.class, () ->
             TopologyLoader.loadFromFile(emptyFile.toString())
         );
 
-        // Unknown directive
         Path badDirective = tempDir.resolve("bad_directive.txt");
         Files.writeString(badDirective, "NODE s1 10.0.0.1\n");
         assertThrows(IllegalArgumentException.class, () ->
             TopologyLoader.loadFromFile(badDirective.toString())
         );
 
-        // Unknown asset type
         Path badType = tempDir.resolve("bad_type.txt");
         Files.writeString(badType, "ASSET QUANTUM s1 Name 10.0.0.1 5\n");
         assertThrows(IllegalArgumentException.class, () ->
             TopologyLoader.loadFromFile(badType.toString())
         );
 
-        // Incomplete asset line
         Path incompleteAsset = tempDir.resolve("incomplete_asset.txt");
         Files.writeString(incompleteAsset, "ASSET SERVER s1 Name\n");
         assertThrows(IllegalArgumentException.class, () ->
             TopologyLoader.loadFromFile(incompleteAsset.toString())
         );
 
-        // Invalid number format in criticality
         Path badCrit = tempDir.resolve("bad_crit.txt");
         Files.writeString(badCrit, "ASSET SERVER s1 Name 10.0.0.1 not_a_number\n");
         assertThrows(IllegalArgumentException.class, () ->
             TopologyLoader.loadFromFile(badCrit.toString())
         );
 
-        // Link with unknown endpoint asset
         Path missingEndpoint = tempDir.resolve("missing_endpoint.txt");
         Files.writeString(missingEndpoint, """
             ASSET SERVER s1 Server 10.0.0.1 3
@@ -158,7 +149,6 @@ class TopologyLoaderTest {
             TopologyLoader.loadFromFile(missingEndpoint.toString())
         );
 
-        // Invalid cost or bandwidth in link
         Path badLinkCost = tempDir.resolve("bad_link_cost.txt");
         Files.writeString(badLinkCost, """
             ASSET SERVER s1 Server 10.0.0.1 3

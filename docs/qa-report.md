@@ -1,11 +1,13 @@
 # QA Report: Network Threat Detection & Cyber Security Monitoring System (threat-detection)
 
-Status: full-stack verification complete. Every reported finding is closed except F-02, which the owner deferred (no git, no CI). Current rating 93 / 100 (A).
-Audited: 2026-11-07, with follow-up passes on 2026-11-08 covering the product name, 3D auto-rotate, the warm text palette, the 2D topology and the gold controls.
+Status: gate passed for phases 0 to 13. Part A is the 2026-11-07 audit of the base system; Part B is the 2026-11-08 final gate over the thirteen extension phases. Current rating 94 / 100 (A).
+Audited: 2026-11-07 for the base system, with a final gate on 2026-11-08 covering flow telemetry, the durable store, security hardening, Zeek import, threat intel, NDR detectors, the alert quality gate, the pure Java flow model, SIEM correlation, containment, notifications, forensics, compliance and benchmarks.
 Auditor: Qoder (assisted QA session).
-Scope: Maven backend (13 packages, 127 tests), React/Vite client (9 portal pages, 12 test files, 35 tests), live HTTP API, SSE stream, browser walk-through of every route, static architecture and design conformance audit.
+Scope: Maven backend (23 packages, 105 compiled sources, 229 tests in 41 classes), React/Vite client (15 pages, 15 test files, 65 tests), live HTTP API on the packaged jar, offline Zeek import, benchmark mode, static architecture and design conformance audit.
 
 ---
+
+## Part A: base system audit (2026-11-07)
 
 ## 1. Environment and commands actually executed
 
@@ -312,3 +314,184 @@ Test totals: `mvn -q clean test` 127 tests, `npm test -- --run` 12 files and 35 
 **Weighted total: 93 / 100. Grade: A.** Up from 73 / 100 (C+) at audit time.
 
 As a demo or coursework artefact this passes without caveats. As a locally exposed service it is defensible: the session boundary is hardened, the API contract is closed, and every defect a reviewer can reproduce has a test. The two remaining points of exposure are process, not code: version control with a CI gate, and a browser automation or Lighthouse run on a real device.
+
+---
+
+## Part B: final gate, phases 2 to 13 (2026-11-08)
+
+### B.1 Environment and commands executed
+
+| Item | Value |
+| --- | --- |
+| OS | Windows 25H2, PowerShell 5.1 |
+| Java | 21.0.13 (Eclipse Adoptium) from `.tools\jdk`, compiled with `release 17` |
+| Maven | 3.9.9 from `.tools\maven`, run offline (`-o`) |
+| Node | 22.20.0, npm 10.9.3 from `.tools\node` |
+| Server under test | `java -jar target\threat-detection-1.0-SNAPSHOT.jar --web --port 8099 --seed 7` |
+
+| Command | Result |
+| --- | --- |
+| `.tools\run-mvn.cmd -o -B test` | BUILD SUCCESS, Tests run: 229, Failures: 0, Errors: 0, Skipped: 0 |
+| `.tools\run-npm.cmd test -- --run` | 15 files, 65 tests, all passed, exit 0 |
+| `.tools\run-npm.cmd run typecheck` | exit 0, no type errors |
+| `.tools\run-npm.cmd run build` | exit 0, assets written to `src/main/resources/web/` |
+| `.tools\run-mvn.cmd -o -B package -DskipTests` | BUILD SUCCESS, shaded jar replaces the plain one |
+| `java -jar ... --benchmark 200` | 5 rows printed, exit 0 |
+| `java "-Dntd.persistence.enabled=true" -jar ... --import-zeek src\main\resources\samples\sample-conn.log` | `1693 flows from 1693 lines, 0 skipped, 40 hosts`, then `stored 1693 flows in data\ntd.db`, exit 0 |
+| `powershell -NoProfile -File .tools\smoke.ps1` | every route, gate and refusal answered as documented in B.4 |
+| Browser pass over the new panels | Flows Stored, the Admin operations table, a containment block and release, and an evidence export, with 0 console errors and 0 failed requests |
+
+Benchmark, one 200 event shot on this machine. The figures include JIT warm up, so they describe a shape rather than a measurement suite:
+
+| Benchmark | ops | us/op | ops/s |
+| --- | --- | --- | --- |
+| `flow-recorder.accept` | 200 | 135.52 | 7,379 |
+| `detection.analyze` | 800 | 5.85 | 171,043 |
+| `ml.features` | 200 | 8.34 | 119,847 |
+| `ml.kmeans.train(200)` | 1 | 4,465.00 | 224 |
+| `alerts.quality-gate` | 200 | 275.96 | 3,624 |
+
+The gate row is the outlier: it is slower than running four detectors over the same event. The measurement covers the whole `allow()` call. At 3,624 ops/s it still sits far above any alert rate the pipeline can produce, so it is recorded here rather than changed. It is the first row to look at if the gate is ever moved onto a hotter path.
+
+### B.2 Findings
+
+| ID | Severity | Area | Status | Title |
+| --- | --- | --- | --- | --- |
+| F-24 | High | Durable store | Fixed | `flush()` could report success before the batch reached the disk |
+| F-25 | Low | Notifications | Fixed | The error description was published after the dropped counter |
+| F-26 | Medium | Zeek import | Fixed | `zeek.enabled` shipped and documented but read nowhere |
+| F-27 | Low | Docs / CLI | Fixed | The documented import command could not work, and PowerShell splits an unquoted `-D` argument |
+| F-28 | Low | Tests | Fixed | `AlertQualityGate` and the engine gate seam had no coverage at all |
+| F-29 | Low | Tooling | Fixed | `smoke.ps1` crashed on the single page shell |
+| F-30 | Low | Tests | Fixed | Three new tests asserted the wrong thing |
+
+#### F-24, the one that mattered
+
+`WriteBehindQueue` drained `pending` inside `synchronized (pending)`, released the lock, and only then marked the batch in flight inside `write()`. A `flush()` that landed in that window saw an empty queue and nothing being written, returned `true`, and its caller read the store before the commit had happened. `PersistenceTest.recorderCloseListenerReachesStore` read zero rows at the assertion that followed the flush, while `closeAllOpen()` had correctly reported the key it closed.
+
+The batch is now marked in flight inside the same lock that drains it, so "taken off the queue" and "reached the disk" cannot be confused. `flush()` is documented as a durability barrier rather than a queue length check, because that is the contract the persistence service and its callers depend on.
+
+#### The rest
+
+- F-25: `dropped.addAndGet(...)` ran before `lastError.set(...)`, so a reader watching the counter could see `1` with a null description. The description is published first.
+- F-26: the offline importer ran regardless of `zeek.enabled`. `Main.importZeek` now reads the key and prints a note when it is off.
+- F-27: two separate defects in the walkthrough. The README import command omitted the store override, so following it printed `The durable store is disabled`. Separately, Windows PowerShell 5.1 splits an unquoted `-Dntd.persistence.enabled=true` into a main class of `.persistence.enabled=true`, so the line is now quoted and the reason is stated next to it.
+- F-29: `Invoke-WebRequest` without `-UseBasicParsing` throws a `NullReferenceException` from the IE engine on the streamed shell. The script uses basic parsing and now also probes the nine new endpoints and the three Admin only reads.
+- F-30: `AuditLogTest` expected a denied or failed count of one for a null outcome, but a null outcome normalises to `ALLOWED`. `OperationsApiTest` asserted the admin actor on every `auth.login` row while the same test also opens a viewer session. `MlTest` expected exactly one alert from an outlier, but the model learns from the stream it scores, so a few warm up flows legitimately score at or above the threshold. All three were assertion errors; the production behaviour was correct in each case.
+
+### B.3 Capability matrix
+
+| Capability | Key | Default | Where it shows |
+| --- | --- | --- | --- |
+| Flow telemetry | `flow.enabled` | on | `GET /api/flows`, the Flows page |
+| Durable store | `persistence.enabled` | off | `GET /api/flows/history`, `/api/persistence/status`, `/api/compliance/summary` |
+| Audit trail | `audit.enabled` | on | `GET /api/audit`, the Admin audit panel |
+| Zeek import | `zeek.enabled` | on | `--import-zeek <file>` |
+| Threat intel | `intel.enabled` | off | the signature detector via `intel.feed` |
+| Alert quality gate | `alerts.dedupe.enabled`, `alerts.minSeverity` | off | `GET /api/alert-quality` |
+| Beaconing detector | `detection.beaconing.enabled` | off | `DetectorFactory.createNdr()` |
+| Exfiltration detector | `detection.exfil.enabled` | off | `DetectorFactory.createNdr()` |
+| Lateral movement detector | `detection.lateral.enabled` | off | `DetectorFactory.createNdr()` |
+| Flow anomaly model | `ml.enabled` | off | `GET /api/ml/status`, the Admin operations table |
+| Correlation | `correlation.enabled` | off | `GET /api/correlation/status` |
+| Containment | `containment.enabled`, `containment.enforce` | off | `GET /api/containment`, the Admin containment form |
+| Notifications | `notifications.enabled` | off | `GET /api/notifications` |
+| Evidence bundles | `forensics.enabled` | off | `POST /api/forensics/export` |
+| Benchmarks | none | command line | `--benchmark [events]` |
+
+### B.4 Live matrix
+
+Against the packaged jar on port 8099 with the shipped defaults:
+
+```
+POST /api/login admin                       = 200, csrf cookie issued
+POST /api/sim/start with token              = 200
+GET  /api/flows?limit=4                     = 200, 4 rows
+GET  /api/flows?limit=1                     = 200, 1 row
+GET  /api/flows?port=abc                    = 400
+GET  /api/alert-quality                     = 200, dedupe off, 0 tracked
+GET  /api/ml/status                         = 200, enabled false, model disabled
+GET  /api/correlation/status                = 200, enabled false
+GET  /api/containment                       = 200, enabled false, 0 blocked
+GET  /api/notifications                     = 200, enabled false
+GET  /api/compliance/summary                = 200, storeEnabled false
+GET  /api/audit                             = 200, entries newest first
+GET  /api/persistence/status                = 200, enabled false
+GET  /api/flows/history?limit=5             = 503, the store is off
+viewer GET /api/audit                       = 403
+viewer GET /api/compliance/summary          = 403
+viewer GET /api/persistence/status          = 403
+GET  /portal/flows                          = 200, root div present
+```
+
+Offline paths against the same jar:
+
+```
+--benchmark 200                                   = 5 rows, exit 0
+--import-zeek sample-conn.log                     = refused, store off, exit 0
+-Dntd.persistence.enabled=true --import-zeek ...  = 1693 flows stored, exit 0
+```
+
+Browser pass, with the store, the model, correlation, containment, notifications, forensics and the quality gate switched on for the run:
+
+- Flows Live said there was nothing to show yet, which was true because the simulator had not been started on that instance. Stored said `Read from the durable store` and rendered 500 rows from the imported capture, which is the `flow.api.max` cap.
+- Admin operations reported Flow model `Cold` at `0 samples`, Correlation `On` at `2 signal minimum, 600s window`, Containment `On` at `0 blocked, enforcement off`, Notifications `On` at `0 recorded`.
+- Blocking `203.0.113.77` for 45 minutes answered `Contained 203.0.113.77 for 45 minutes.`, added the row with reason `browser check` and actor `admin`, and Release answered `Released 203.0.113.77.`
+- Export answered `Evidence bundle written to evidence\bundle-20261108T072405Z.` and the directory holds `flows.json`, `alerts.json`, `audit.json`, `incidents.json` and `manifest.json`. The generated `evidence/` directory is now ignored by version control, which it was not.
+- No console errors and no failed requests across the pages visited.
+
+### B.5 Regression tests
+
+Backend, 229 tests in 41 classes. The classes added for phases 1 to 13:
+
+| Class | Tests | Capability |
+| --- | --- | --- |
+| `flows.FlowRecorderTest` | 13 | flow telemetry |
+| `persistence.PersistenceTest` | 6 | durable store |
+| `security.AuditLogTest` | 5 | audit trail |
+| `zeek.ZeekConnLogParserTest` | 5 | offline import |
+| `intel.ThreatIntelTest` | 6 | threat feed |
+| `detection.NdrDetectorsTest` | 6 | beaconing, exfiltration, lateral movement |
+| `detection.EventObserverTest` | 1 | the event tap the recorder and the model hang from |
+| `detection.AlertQualityGateTest` | 10 | dedupe, severity floor, bounds, the cooldown seam |
+| `ml.MlTest` | 6 | feature extraction, training, scoring, alerts |
+| `correlation.SiemCorrelatorTest` | 4 | multi signal escalation |
+| `containment.ContainmentServiceTest` | 7 | blocks, expiry, the audit of who asked |
+| `notify.NotificationServiceTest` | 7 | outbox, floor, webhook, bounds |
+| `forensics.EvidenceExporterTest` | 6 | bundle layout, manifest digests, truncation |
+| `compliance.ComplianceServiceTest` | 3 | the single summary read |
+| `bench.BenchmarksTest` | 5 | the five measurements, zero safe, the report |
+| `web.OperationsApiTest` | 9 | the new endpoints, their role gates and their refusals |
+
+Two of those classes exist because the gate found the gap: `AlertQualityGateTest` covers a class that had no test and a seam in `DetectionEngine` that had none either, and `EventObserverTest` covers the tap the whole telemetry path hangs from.
+
+Client, 65 tests in 15 files. `tests/operations.test.tsx` is new, 11 cases over the Admin operations table, the containment form and its 409, a release that is not blocked, a refused export, the compliance table, the audit rows, the disabled export button and the viewer gate. `tests/flowsPage.test.tsx` gained three stored mode cases on top of its four: a stored read that replaces the live rows, an empty store that says so, and a 503 that names `persistence.enabled` and offers a retry.
+
+### B.6 Deliberate divergences
+
+1. Defaults. Ten capability switches ship. Three are on (`flow.enabled`, `zeek.enabled`, `audit.enabled`) and seven are off. The three that are on change nothing an operator can see until they open a new page or run the new command; the seven that are off answer with their own disabled state rather than pretending to work, which is what the live matrix in B.4 shows.
+2. No sixth pattern. The alert gate, the admission predicate and the event observer are seams on existing classes (Strategy and Observer), not new patterns. `docs/class-spec.md` states this explicitly.
+3. `DetectorFactory.createAll()` still returns exactly four detectors. The NDR family is `createNdr()`, so the phase 0 contract test is untouched, and `EnumsTest` still pins exactly four attack types.
+4. The class spec counts 105 elements, up from 69. `docs/class-spec.md` was rewritten around that number.
+
+### B.7 Open and unverified
+
+- F-02 is unchanged: no version control and no CI. It remains the one item that separates "demo ready" from "production ready".
+- The new client panels were clicked through in a browser with every capability on (B.4). The containment form, the release, the export and the operations table were exercised for real; the Flows Live switch was not, because that instance had no simulator running.
+- The Docker build was not executed. The `Dockerfile` was read, not run.
+- The benchmark figures are one 200 event shot and include warm up.
+- TLS behaviour, mobile widths, long run stability and the 2,000,000 state cap remain as listed in Part A.
+
+### B.8 Scorecard delta
+
+| Area | Part A | Now | Why |
+| --- | --- | --- | --- |
+| Test coverage and automation | 8/10 | 9/10 | 229 backend and 65 client tests, and every defect this gate found now has a regression test |
+| Data integrity and state lifecycle | 9/10 | 9/10 | the flush barrier is a real durability fix, offset by it having shipped broken |
+| Layered architecture and patterns | 8/10 | 9/10 | eleven new packages with one way dependencies, seams instead of rewrites, no sixth pattern |
+| Build and dependency health | 8/10 | 8/10 | clean builds and a green suite; still no CI (F-02) |
+| Frontend functionality and routing | 9/10 | 9/10 | the new panels are tested at the component level, not yet clicked through |
+
+**Weighted total: 94 / 100. Grade: A.** One point over Part A, from test coverage and architecture, with the durability defect counted against the area it belongs to rather than hidden.
+
+What the gate says about the work: thirteen phases landed without disturbing a single earlier contract, and the suite caught three defects in the new code (a flush race, an error publishing order, and a switch that was documented but never read). What it does not say is that the system has been exercised by a human in a browser for the new pages, or that it has ever run under version control.

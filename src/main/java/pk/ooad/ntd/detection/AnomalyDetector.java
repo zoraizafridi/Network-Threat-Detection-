@@ -39,13 +39,11 @@ public class AnomalyDetector extends Detector {
         RunningStats hostStats = stats.computeIfAbsent(e.sourceIp(), k -> new RunningStats());
         double value = (double) e.bytes();
 
-        // Must not alert during warmup count
         if (hostStats.getCount() < warmupCount) {
             hostStats.update(value);
             return Optional.empty();
         }
 
-        // Check z-score after warmup
         double z = hostStats.zScore(value);
         if (z > zThreshold) {
             // Flagged anomaly: no baseline update on flagged values
@@ -60,7 +58,6 @@ public class AnomalyDetector extends Detector {
             );
             return Optional.of(alert);
         } else {
-            // Normal event: update baseline
             hostStats.update(value);
             return Optional.empty();
         }

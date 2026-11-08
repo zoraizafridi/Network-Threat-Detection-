@@ -85,9 +85,19 @@ public final class ConfigManager {
                 .toList();
     }
 
+    /**
+     * Resolves a key. A system property named {@code ntd.<key>} wins over the
+     * properties file, which is how a demo or a test turns a single feature on
+     * without editing the packaged configuration:
+     * {@code -Dntd.detection.beaconing.enabled=true}.
+     */
     private String valueFor(String key) {
         if (key == null || key.isBlank()) {
             throw new InvalidConfigException("Configuration key must not be blank");
+        }
+        String override = System.getProperty("ntd." + key);
+        if (override != null) {
+            return override.trim();
         }
         String value = props.getProperty(key);
         return value != null ? value.trim() : null;
