@@ -6,95 +6,127 @@ import pk.ooad.ntd.util.ConfigManager;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * Drops repeat alerts and alerts below a floor.
- *
- * <p>Two detectors can describe the same fact: a port scan produces a signature
- * alert and a burst alert for one source within a second. Repeats of the same
- * (detector, attack type, source, target) inside
- * {@code alerts.dedupe.windowSeconds} collapse into the first one. A severity
- * floor drops the long tail an operator has said they do not want.</p>
- *
- * <p>Suppression is counted, never silent: {@link #stats()} reports how many
- * alerts were folded and how many fell below the floor, so the effect of turning
- * the gate on is measurable rather than a mystery.</p>
- */
 public final class AlertQualityGate implements AlertGate {
 
-    /** Counters plus the size of the dedupe table. */
-    public record Stats(boolean dedupeEnabled, String minimumSeverity, long duplicates, long belowFloor, int tracked) {
+    public record Stats(boolean dedupeEnabled, String minimumSeverity, long delivered, long duplicates,
+                        long belowFloor, long ruleSuppressed, long stormSuppressed, int tracked,
+                        int maxPerMinute, int rules) {
     }
+
+    private static final int PRUNE_BUDGET = 16;
 
     private final boolean dedupeEnabled;
     private final long windowMillis;
     private final Severity minimumSeverity;
     private final int maxKeys;
-    private final Map<String, Instant> lastSeen = new LinkedHashMap<>();
+    private final int maxPerMinute;
+    private final SuppressionRules rules;
+    private final Map<String, Alert> lastSeen = new LinkedHashMap<>();
+    private final Deque<Long> deliveries = new ArrayDeque<>();
+    private final AtomicLong delivered = new AtomicLong();
     private final AtomicLong duplicates = new AtomicLong();
     private final AtomicLong belowFloor = new AtomicLong();
+    private final AtomicLong ruleSuppressed = new AtomicLong();
+    private final AtomicLong stormSuppressed = new AtomicLong();
 
     public AlertQualityGate() {
         this(ConfigManager.getInstance());
     }
 
     public AlertQualityGate(ConfigManager config) {
+        this(config, new SuppressionRules(config));
+    }
+
+    public AlertQualityGate(ConfigManager config, SuppressionRules rules) {
         this(
-                Boolean.parseBoolean(config.getString("alerts.dedupe.enabled", "false")),
+                Boolean.parseBoolean(config.getString("alerts.dedupe.enabled", "true")),
                 config.getInt("alerts.dedupe.windowSeconds", 60),
                 severity(config.getString("alerts.minSeverity", "LOW")),
-                config.getInt("alerts.dedupe.maxKeys", 5000));
+                config.getInt("alerts.dedupe.maxKeys", 5000),
+                config.getInt("alerts.maxPerMinute", 600),
+                rules);
     }
 
     public AlertQualityGate(boolean dedupeEnabled, int windowSeconds, Severity minimumSeverity, int maxKeys) {
+        this(dedupeEnabled, windowSeconds, minimumSeverity, maxKeys, 0, null);
+    }
+
+    public AlertQualityGate(boolean dedupeEnabled, int windowSeconds, Severity minimumSeverity, int maxKeys,
+                            int maxPerMinute, SuppressionRules rules) {
         this.dedupeEnabled = dedupeEnabled;
         this.windowMillis = Math.max(1, windowSeconds) * 1000L;
         this.minimumSeverity = minimumSeverity == null ? Severity.LOW : minimumSeverity;
         this.maxKeys = Math.max(16, maxKeys);
+        this.maxPerMinute = Math.max(0, maxPerMinute);
+        this.rules = rules;
     }
 
     @Override
-    public synchronized boolean allow(Alert alert) {
+    public boolean allow(Alert alert) {
+        return decide(alert).isDelivered();
+    }
+
+    @Override
+    public synchronized Decision decide(Alert alert) {
         if (alert == null) {
-            return false;
+            return Decision.suppress("empty");
         }
+        Instant now = alert.getTimestamp();
         if (rank(alert.getSeverity()) < rank(minimumSeverity)) {
             belowFloor.incrementAndGet();
-            return false;
+            return Decision.suppress("floor");
         }
-        if (!dedupeEnabled) {
-            return true;
+        String rule = rules == null ? null : rules.match(alert);
+        if (rule != null) {
+            ruleSuppressed.incrementAndGet();
+            return Decision.suppress("rule:" + rule);
         }
-        String key = key(alert);
-        Instant now = alert.getTimestamp();
-        Instant last = lastSeen.get(key);
-        if (last != null) {
-            long age = Duration.between(last, now).toMillis();
-            // A negative age means the alert is older than the one already seen
-            // (out of order arrival); it is not a duplicate, so it is allowed
-            // through and replaces the mark.
-            if (age >= 0 && age < windowMillis) {
-                duplicates.incrementAndGet();
-                return false;
+        String key = dedupeEnabled ? key(alert) : null;
+        if (key != null) {
+            Alert previous = lastSeen.get(key);
+            if (previous != null) {
+                Instant last = previous.getLastSeen() != null ? previous.getLastSeen() : previous.getTimestamp();
+                long age = Duration.between(last, now).toMillis();
+                if (age >= 0 && age < windowMillis) {
+                    duplicates.incrementAndGet();
+                    return Decision.fold(previous);
+                }
             }
         }
-        lastSeen.put(key, now);
-        prune(now);
-        return true;
+        if (overStormCap(now)) {
+            stormSuppressed.incrementAndGet();
+            return Decision.suppress("storm");
+        }
+        if (key != null) {
+            lastSeen.put(key, alert);
+            prune(now);
+        }
+        delivered.incrementAndGet();
+        deliveries.addLast(now.toEpochMilli());
+        return Decision.deliver();
     }
 
     public synchronized Stats stats() {
-        return new Stats(dedupeEnabled, minimumSeverity.name(), duplicates.get(), belowFloor.get(), lastSeen.size());
+        return new Stats(dedupeEnabled, minimumSeverity.name(), delivered.get(), duplicates.get(),
+                belowFloor.get(), ruleSuppressed.get(), stormSuppressed.get(), lastSeen.size(),
+                maxPerMinute, rules == null ? 0 : rules.rules().size());
     }
 
     public synchronized void reset() {
         lastSeen.clear();
+        deliveries.clear();
+        delivered.set(0L);
         duplicates.set(0L);
         belowFloor.set(0L);
+        ruleSuppressed.set(0L);
+        stormSuppressed.set(0L);
     }
 
     public boolean isDedupeEnabled() {
@@ -109,14 +141,33 @@ public final class AlertQualityGate implements AlertGate {
         return minimumSeverity;
     }
 
+    public int getMaxPerMinute() {
+        return maxPerMinute;
+    }
+
+    public SuppressionRules getRules() {
+        return rules;
+    }
+
+    private boolean overStormCap(Instant now) {
+        if (maxPerMinute <= 0) {
+            return false;
+        }
+        long cutoff = now.toEpochMilli() - 60_000L;
+        while (!deliveries.isEmpty() && deliveries.peekFirst() < cutoff) {
+            deliveries.removeFirst();
+        }
+        return deliveries.size() >= maxPerMinute;
+    }
+
     private void prune(Instant now) {
-        // Entries older than the window can never suppress anything again, so
-        // they are the first to go. The size cap is a second safety net: a
-        // LinkedHashMap gives up its oldest insertion first.
-        Iterator<Map.Entry<String, Instant>> iterator = lastSeen.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<String, Instant> entry = iterator.next();
-            if (Duration.between(entry.getValue(), now).toMillis() > windowMillis) {
+        long cutoff = now.toEpochMilli() - windowMillis;
+        int budget = PRUNE_BUDGET;
+        Iterator<Map.Entry<String, Alert>> iterator = lastSeen.entrySet().iterator();
+        while (iterator.hasNext() && budget-- > 0) {
+            Map.Entry<String, Alert> entry = iterator.next();
+            Instant last = entry.getValue().getLastSeen();
+            if (last != null && last.toEpochMilli() < cutoff) {
                 iterator.remove();
             }
         }

@@ -2,19 +2,6 @@ package pk.ooad.ntd.flows;
 
 import java.time.Instant;
 
-/**
- * Filter for {@link FlowRecorder#query(FlowQuery)}. A null field means "no
- * constraint", so {@link #all(int)} returns everything the recorder holds.
- *
- * @param srcIp         exact source address
- * @param dstIp         exact destination address
- * @param port          matches either the source or the destination port
- * @param from          inclusive lower bound on the flow end time
- * @param to            inclusive upper bound on the flow start time
- * @param limit         maximum rows returned; zero or less falls back to the
- *                      recorder's configured cap
- * @param includeActive whether flows that are still open are included
- */
 public record FlowQuery(
         String srcIp,
         String dstIp,

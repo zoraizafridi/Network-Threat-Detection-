@@ -1,0 +1,17 @@
+# Local TLS example for Caddy in front of the server.
+#
+# Caddy issues a certificate from its own local CA, so a browser warns until the
+# CA is trusted. Set NTD_HOST to a name that resolves to this machine and that
+# can be validated over the internet, and Caddy uses ACME instead; `tls internal`
+# then does nothing for that name.
+{$NTD_HOST:localhost} {
+	tls internal
+	encode zstd gzip
+	reverse_proxy ntd:8080 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+}

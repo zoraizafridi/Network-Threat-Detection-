@@ -8,6 +8,15 @@ export interface FeedAlert {
   detectorName: string;
   description: string;
   simulated?: boolean;
+  occurrences?: number;
+  firstSeen?: string;
+  lastSeen?: string;
+  status?: string;
+}
+
+export function foldLabel(alert: FeedAlert): string {
+  const count = alert.occurrences ?? 1;
+  return count > 1 ? `x${count}` : "";
 }
 
 export const FEED_CAP = 500;

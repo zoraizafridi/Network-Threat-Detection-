@@ -1,9 +1,9 @@
 # QA Report: Network Threat Detection & Cyber Security Monitoring System (threat-detection)
 
-Status: gate passed for phases 0 to 13. Part A is the 2026-11-07 audit of the base system; Part B is the 2026-11-08 final gate over the thirteen extension phases. Current rating 94 / 100 (A).
-Audited: 2026-11-07 for the base system, with a final gate on 2026-11-08 covering flow telemetry, the durable store, security hardening, Zeek import, threat intel, NDR detectors, the alert quality gate, the pure Java flow model, SIEM correlation, containment, notifications, forensics, compliance and benchmarks.
+Status: This report records what was run and what was not. No independent review has been done; all findings and measurements come from the same assisted session that wrote the code.
+Audited: 2026-11-07 for the base system, with a final gate on 2026-11-08 covering flow telemetry, the durable store, security hardening, Zeek import, threat intel, NDR detectors, the alert quality gate, the pure Java flow model, SIEM correlation, containment, notifications, forensics, compliance and benchmarks, then a completion pass on the same day over the items that gate left open.
 Auditor: Qoder (assisted QA session).
-Scope: Maven backend (23 packages, 105 compiled sources, 229 tests in 41 classes), React/Vite client (15 pages, 15 test files, 65 tests), live HTTP API on the packaged jar, offline Zeek import, benchmark mode, static architecture and design conformance audit.
+Scope: Maven backend (23 packages, 141 compiled sources, 259 tests in 46 classes), React/Vite client (15 pages, 15 test files, 66 tests), live HTTP API on the packaged jar, offline Zeek import, benchmark mode, static architecture and design conformance audit.
 
 ---
 
@@ -18,7 +18,7 @@ Scope: Maven backend (23 packages, 105 compiled sources, 229 tests in 41 classes
 | Maven | 3.10.0 |
 | Node | v26.13.0 |
 | npm | invoked as `E:\nodejs\npm.cmd` (npm.ps1 blocked by execution policy) |
-| Server under test | `java -jar target\threat-detection-1.0-SNAPSHOT-shaded.jar --web --port 18080` |
+| Server under test | `java -jar target\threat-detection-1.0-SNAPSHOT.jar --web --port 18080` |
 
 | Command | Result |
 | --- | --- |
@@ -286,34 +286,13 @@ Test totals: `mvn -q clean test` 127 tests, `npm test -- --run` 12 files and 35 
 ## 8. Open and unverified
 
 - F-02: no git history and no CI workflow. Deliberately excluded by the owner. This is the one item that keeps the project at "demo ready" rather than "production ready".
-- Mobile at 390x844 and tablet widths: the browser harness cannot resize its viewport, so the narrow layout was verified from the stylesheet. Breakpoints are 960 px and 900 px (the sidebar becomes an off-canvas panel behind the menu button), and a `:has(> table)` rule keeps wide tables scrolling inside their panel.
+- Mobile at 390x844 and tablet widths: the browser harness cannot resize its viewport, so the narrow layout was verified from the stylesheet. Breakpoints are 1279, 1100, 960, 900, 860, 720 and 640 px (the sidebar becomes an off-canvas panel behind the menu button, the topbar wraps, and `.panel:has(table)` becomes a horizontal scroll container), and the 640 px block drops the status text, the account name and the wide popovers so nothing overlaps.
 - Lighthouse, axe and a full keyboard-only traversal were not run. Focus behaviour was checked by hand for Escape, the dialog roles and the gold ring contrast.
 - TLS behaviour (`Secure` cookie path, controlled by `auth.session.secureCookie`) is implemented but untested, because the demo server is plain HTTP.
 - Docker build and container run were not executed; the `Dockerfile` was read, not run.
 - Long run stability beyond roughly 15 minutes of simulation, memory growth over hours, and the 2,000,000 state cap under load were not exercised.
 
 ---
-
-## 9. Scorecard
-
-| Area | Weight | Score | Notes |
-| --- | --- | --- | --- |
-| Build and dependency health | 10% | 8/10 | Clean build, no warnings, no audit findings; still no CI (F-02) |
-| Backend functional correctness | 15% | 9/10 | 127 tests, closed route set, validated input |
-| Detection and simulation realism | 10% | 9/10 | `simulated` is domain data, provenance proven live |
-| Security and authentication | 15% | 8/10 | PBKDF2, throttling, CSRF, cookie flags; demo accounts still enabled by default |
-| Data integrity and state lifecycle | 10% | 9/10 | Reset, counts and timestamps consistent, now covered by more tests |
-| API design and contracts | 10% | 9/10 | 404, 415, 400, CSRF, SSE hello, typed simulation flag |
-| Frontend functionality and routing | 10% | 9/10 | Redirect, catch-all, single scene, admin page, fixed timestamps |
-| UI and design spec conformance | 10% | 8/10 | Owner directed palette; spec structure restored |
-| Performance | 5% | 8/10 | Route chunks and lazy three; the three chunk is still 1 MB raw |
-| Accessibility | 5% | 8/10 | Focus trap, dialog roles, autofocus, labelled controls; no axe run |
-| Code quality and architecture | 5% | 8/10 | Magic numbers configured, dead code removed; client role map accepted as is |
-| Test coverage and automation | 5% | 8/10 | Every fixed defect has a regression test; no browser automation |
-
-**Weighted total: 93 / 100. Grade: A.** Up from 73 / 100 (C+) at audit time.
-
-As a demo or coursework artefact this passes without caveats. As a locally exposed service it is defensible: the session boundary is hardened, the API contract is closed, and every defect a reviewer can reproduce has a test. The two remaining points of exposure are process, not code: version control with a CI gate, and a browser automation or Lighthouse run on a real device.
 
 ---
 
@@ -336,22 +315,24 @@ As a demo or coursework artefact this passes without caveats. As a locally expos
 | `.tools\run-npm.cmd run typecheck` | exit 0, no type errors |
 | `.tools\run-npm.cmd run build` | exit 0, assets written to `src/main/resources/web/` |
 | `.tools\run-mvn.cmd -o -B package -DskipTests` | BUILD SUCCESS, shaded jar replaces the plain one |
-| `java -jar ... --benchmark 200` | 5 rows printed, exit 0 |
+| `java -jar ... --benchmark` | 6 rows printed, exit 0 |
+| `java -jar ... --soak 600` | 600 s at 2000 events/s, 0 dropped, exit 0; table in `docs/benchmarks.md` |
 | `java "-Dntd.persistence.enabled=true" -jar ... --import-zeek src\main\resources\samples\sample-conn.log` | `1693 flows from 1693 lines, 0 skipped, 40 hosts`, then `stored 1693 flows in data\ntd.db`, exit 0 |
 | `powershell -NoProfile -File .tools\smoke.ps1` | every route, gate and refusal answered as documented in B.4 |
 | Browser pass over the new panels | Flows Stored, the Admin operations table, a containment block and release, and an evidence export, with 0 console errors and 0 failed requests |
 
-Benchmark, one 200 event shot on this machine. The figures include JIT warm up, so they describe a shape rather than a measurement suite:
+Benchmark, 10000 events per round over 5 timed rounds after a discarded warm-up. The first table in this section was a single 200 event shot that included JIT warm-up, and its gate row was an artifact of a defect rather than a property of the code; both are explained below.
 
-| Benchmark | ops | us/op | ops/s |
-| --- | --- | --- | --- |
-| `flow-recorder.accept` | 200 | 135.52 | 7,379 |
-| `detection.analyze` | 800 | 5.85 | 171,043 |
-| `ml.features` | 200 | 8.34 | 119,847 |
-| `ml.kmeans.train(200)` | 1 | 4,465.00 | 224 |
-| `alerts.quality-gate` | 200 | 275.96 | 3,624 |
+| Benchmark | ops/round | mean us | p50 us | p95 us | p99 us | ops/s |
+| --- | --- | --- | --- | --- | --- | --- |
+| `flow-recorder.accept` | 10000 | 3.93 | 3.50 | 6.60 | 13.00 | 254,629 |
+| `detection.analyze` | 40000 | 0.74 | 0.40 | 2.10 | 4.20 | 1,359,338 |
+| `detection.ndr.analyze` | 40000 | 0.08 | 0.10 | 0.10 | 0.20 | 11,841,537 |
+| `ml.features` | 10000 | 0.33 | 0.30 | 0.50 | 1.40 | 3,026,653 |
+| `ml.kmeans.train(2000)` | 1 | 11,987.58 | 10,084.10 | 20,955.00 | 20,955.00 | 83 |
+| `alerts.quality-gate` | 10000 | 2.96 | 2.30 | 4.60 | 8.50 | 337,734 |
 
-The gate row is the outlier: it is slower than running four detectors over the same event. The measurement covers the whole `allow()` call. At 3,624 ops/s it still sits far above any alert rate the pipeline can produce, so it is recorded here rather than changed. It is the first row to look at if the gate is ever moved onto a hotter path.
+The old table reported `alerts.quality-gate` at 275.96 us against 5.85 us for four detectors, and an earlier run at 105.71 us, and called it an outlier that sat above any achievable alert rate. It was a defect. `AlertQualityGate.prune()` walked the entire fold map on every delivery, so the row measured the map size, not the gate: the 200 event shot scanned 200 keys and the 10000 event shot scanned 10000. The prune is now bounded to 16 entries per delivery, the row is 2.96 us, and the fold window is still enforced. `docs/benchmarks.md` records that fix together with two more the soak exposed, a full active-flow scan on eviction in `FlowRecorder` and a synchronous file write per alert in `EventLog`.
 
 ### B.2 Findings
 
@@ -482,16 +463,72 @@ Client, 65 tests in 15 files. `tests/operations.test.tsx` is new, 11 cases over 
 - The benchmark figures are one 200 event shot and include warm up.
 - TLS behaviour, mobile widths, long run stability and the 2,000,000 state cap remain as listed in Part A.
 
-### B.8 Scorecard delta
-
-| Area | Part A | Now | Why |
-| --- | --- | --- | --- |
-| Test coverage and automation | 8/10 | 9/10 | 229 backend and 65 client tests, and every defect this gate found now has a regression test |
-| Data integrity and state lifecycle | 9/10 | 9/10 | the flush barrier is a real durability fix, offset by it having shipped broken |
-| Layered architecture and patterns | 8/10 | 9/10 | eleven new packages with one way dependencies, seams instead of rewrites, no sixth pattern |
-| Build and dependency health | 8/10 | 8/10 | clean builds and a green suite; still no CI (F-02) |
-| Frontend functionality and routing | 9/10 | 9/10 | the new panels are tested at the component level, not yet clicked through |
-
-**Weighted total: 94 / 100. Grade: A.** One point over Part A, from test coverage and architecture, with the durability defect counted against the area it belongs to rather than hidden.
-
 What the gate says about the work: thirteen phases landed without disturbing a single earlier contract, and the suite caught three defects in the new code (a flush race, an error publishing order, and a switch that was documented but never read). What it does not say is that the system has been exercised by a human in a browser for the new pages, or that it has ever run under version control.
+
+---
+
+## Part C: completion pass gate (2026-11-08)
+
+Part B left 22 items of the 74 numbered requirements at `PARTIAL` and 52 at `MISSING`. This part is the pass that closed them and re-measured the whole system, so the numbers here supersede the counts quoted in Part A and Part B wherever the two disagree.
+
+### C.1 Commands executed against the final tree
+
+| Command | Result |
+| --- | --- |
+| `mvn -o -B test` | BUILD SUCCESS, Tests run: 259, Failures: 0, Errors: 0, Skipped: 0, across 46 classes |
+| `mvn -o -q -B package -DskipTests` | BUILD SUCCESS, `threat-detection-1.0-SNAPSHOT.jar` at 23.9 MB |
+| `npm test -- --run` | 15 files, 66 tests, all passed |
+| `npm run typecheck` | exit 0, no type errors |
+| `npm run build` | exit 0, output written to `src/main/resources/web/` |
+| `java -jar target\threat-detection-1.0-SNAPSHOT.jar --web --port 8097 --config <profile>` | 31 keys layered, `Restored schema 2`, `/healthz` answered 200; the profile used for this pass was removed in the cleanup phase, and any properties file named with `--config` supplies the same 31 keys |
+
+The backend is 141 compiled sources in 23 packages, up from 105 in Part B. The client is unchanged in shape at 15 pages and 15 test files.
+
+### C.2 The audit is closed
+
+`docs/completion-audit.md` now records 72 of the 74 items as `EXISTS`, with the file, symbol or test that decides each one, and the other two as `REMOVED` because the owner withdrew the scripted demo path after this pass. The original Step 0 measurement (2 `EXISTS`, 20 `PARTIAL`, 52 `MISSING`) is preserved in that document, so the distance travelled stays readable instead of being overwritten.
+
+### C.3 Test classes that grew or appeared after Part B
+
+| Class | Tests | Capability |
+| --- | --- | --- |
+| `persistence.PersistenceTest` | 8 (was 6) | a v1 file migrated in place, a corrupt file that degrades to memory |
+| `service.RestoreTest` | 1 | alerts, incidents, blocks, audit rows and the model summary read back through a second facade on the same file |
+| `imports.ImportServiceSampleTest` | 1 | the bundled capture replayed: 1693 flows, 134 alerts, every label accounted for and four traps silent |
+| `simulation.ScenarioServiceTest` | 7 | the seven presets, including the beaconing jitter and the lateral sweep |
+| `intel.ThreatIntelTest` | 12 (was 6) | domain and digest matching, expiry, a reload that keeps the old feed |
+| `detection.NdrDetectorsTest` | 8 (was 6) | the allowlists that keep a known backup out of the exfiltration rule |
+| `bench.SoakTest` | 5 | the sustained load, queue depth and latency split |
+
+The sample replay test is the one worth reading: it pins the exact per label alert counts of the shipped capture, so a threshold change that starts alerting on the 30 NTP polls or the 94 MB internal backup fails the suite with the label named.
+
+### C.4 Browser pass on the packaged jar
+
+A properties profile with the store, intel, forensics and every detector on was layered on the packaged jar on port 8097. Signed in as `admin`.
+
+- Overview: simulation started, the stage moved from `Stage 1 of 4, Recon` to `Stage 2 of 4, Access`, the feed read `6 detected, 1 reached the feed, 17% delivery ratio, 5 folded repeats, 0 suppressed`, and the counters moved to `18 Active nodes, 1 Compromised nodes`.
+- Flows: live mode read `18 Records, 18 Still open`. Stored mode answered `Read from the durable store` and `No stored flows yet. They appear once the store is on and flows close.`
+- Alerts and Incidents: seven alert rows with Time, Severity, Type, Source, Target, Count and Status, and one open incident for `10.0.0.1` holding seven alerts.
+- AttackLab: the `Indicator contact` preset answered `Indicator contact: 3 events submitted from 10.0.0.1 to 10.0.0.3.`
+- Admin, Operations status, quoted row by row: Flow model `Cold` at `1 samples, 0 clusters, threshold 0.9, 0 scored, 0 anomalies, 0 alerts, 0 excluded from training`; Correlation `On` at `5 correlated from 7 signals, 2 signal minimum, 600s window`; Kill chains `On` at `1 rules, 1 matched, last Recon to exfiltration`; Containment `IPS` at `0 blocked, 0 events dropped, 0 refused by a safeguard`; Pipeline metrics `Live` at `79 events processed, 0 queued, 0 dropped, 119 detected, 7 delivered, 125 rows written, 17 MB heap, up 3 min`; Notifications `On` at `12 recorded, 0 sent, 0 failed, 0 dropped`.
+- Admin, evaluation and intel: the panel read `0 labelled flows (0 attack, 0 benign) from 0 replay runs` with its explanation, which is correct on an instance that has imported nothing. The intel panel read feed `threat-intel.json`, detector `on`, `49` indicators (19 addresses, 15 domains, 15 digests), `0` skipped, `1` expired.
+- Admin, compliance: store at `target\browser-pass\ntd-demo.db`, `1 flows, 12 alerts`, `1440 minutes, cutoff 2026-11-07T11:56:27.920585400Z`, `5 of 2000 entries, 0 denied, 0 failed`. The audit trail listed `config.read`, `scenario.run` and `auth.login` by `admin`, all `Allowed`.
+- Admin, containment and evidence: blocking `198.51.100.77` for 45 minutes answered `Contained 198.51.100.77 for 45 minutes.`, Release answered `Released 198.51.100.77.`, and Export answered `Evidence bundle written to target\browser-pass\evidence\bundle-20261108T115704Z.` with `Last bundle: 5 files, 8520 bytes, manifest fb9dd9ed85e037d0.`
+- Control: mode `IPS`, `0 contained, 0 events dropped, 0 automatic. The guards refused 0: 0 allowlisted, 0 rate limited, 0 would split the network.`
+- Console and network: one `THREE.Clock` deprecation warning on the map page and no errors; every request answered 200.
+
+One honest discrepancy. The Stored tab answered "no stored flows yet" at the moment it was opened while the compliance panel later counted one stored flow. Both are correct: a flow is written when it closes, and the rows on screen were still open. It is worth knowing before someone reads the two panels as contradictory.
+
+### C.5 What the completion pass found and fixed
+
+1. The store leaked two JDBC handles when a connection opened and then failed to configure. On Windows the file stayed locked, so a corrupt database could not even be deleted afterwards. `Database` now opens into locals, closes both handles on `SQLException` or `RuntimeException`, and rethrows; `PersistenceTest.corruptDatabaseDegradesToMemory` holds the line and the process no longer keeps a handle on the bad file.
+2. The Admin client's shared mock world predated two endpoints added for the evaluation and metrics panels. `Promise.all` rejected on the missing mocks, so nine cases in `tests/operations.test.tsx` observed a page stuck on `Loading operations status.` and the export they clicked was still disabled. The mock now mirrors the current API types, and the table assertions cover the metrics row, the kill chain row, the labelled flow count and the intel count, which had no coverage before.
+3. The containment badge rendered `Ips` for mode IPS, because every status string went through the word labeller. The two modes are now kept upper case, and the operations test asserts `IPS`.
+
+### C.7 Open and unverified
+
+- F-02 is unchanged and remains the one item that separates demo ready from production ready: no version control and no CI. The owner is handling the repository separately.
+- The Docker image was read, not built.
+- The benchmark figures in `docs/benchmarks.md` come from one host, one synthetic shape and five rounds.
+- TLS termination, mobile widths, a multi day run and the 2,000,000 state cap remain as listed in Part A.
+- The sample capture replay is deterministic for a fixed configuration and seed. A deliberate threshold change will change alert counts, and the test is meant to fail until they are re-baselined on purpose.

@@ -146,7 +146,6 @@ class TrafficSimulatorTest {
         sim.start();
         assertTrue(sim.isRunning());
 
-        // Wait briefly for worker thread to produce events
         long deadline = System.currentTimeMillis() + 1000;
         while (sim.getEventQueue().isEmpty() && System.currentTimeMillis() < deadline) {
             Thread.sleep(20);
@@ -199,4 +198,3 @@ class TrafficSimulatorTest {
         assertEquals(fixedTime, f2.timestamp());
     }
 }
-

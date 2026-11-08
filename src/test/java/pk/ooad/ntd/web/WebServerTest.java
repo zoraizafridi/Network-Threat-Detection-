@@ -380,7 +380,6 @@ class WebServerTest {
     void flowsAreRecordedWhileTheSimulatorRuns() throws Exception {
         login("admin", "admin");
         assertEquals(200, call("POST", "/api/sim/start", null).statusCode());
-        // The simulator only emits background traffic in auto mode.
         assertEquals(200, call("POST", "/api/sim/auto", "{\"on\":true}").statusCode());
         JsonNode rows = awaitFlows();
         assertTrue(rows.size() > 0, "the flow table must fill while the simulator runs");

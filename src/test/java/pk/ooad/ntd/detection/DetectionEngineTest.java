@@ -48,13 +48,11 @@ class DetectionEngineTest {
             queue.offer(sim.generateNormalEvent());
         }
 
-        // Wait for queue to be drained using timed polling check
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
         while (!queue.isEmpty() && System.nanoTime() < deadline) {
             Thread.onSpinWait();
         }
 
-        // stop() cleanly finishes current processing and terminates worker thread
         engine.stop();
         assertFalse(engine.isRunning());
 
@@ -78,7 +76,7 @@ class DetectionEngineTest {
                 alertLatch.countDown();
             });
 
-            DetectionEngine engine = new DetectionEngine(queue, bus, 0); // 0 cooldown for direct attack test
+            DetectionEngine engine = new DetectionEngine(queue, bus, 0);
             engine.addDetector(new SignatureDetector());
             engine.addDetector(new RateThresholdDetector());
             engine.addDetector(new PortScanDetector());
@@ -90,7 +88,6 @@ class DetectionEngineTest {
             String dstIp = "10.0.0.1";
             Instant now = Instant.parse("2026-11-05T12:00:00Z");
 
-            // For AnomalyDetector warmup on DATA_TRANSFER, provide 5 baseline normal events first
             if (attackType == AttackType.DATA_TRANSFER) {
                 long[] warmupBytes = {480L, 510L, 490L, 520L, 500L};
                 for (int i = 0; i < warmupBytes.length; i++) {
@@ -136,25 +133,20 @@ class DetectionEngineTest {
             }
         });
 
-        // Cooldown of 30 seconds
         DetectionEngine engine = new DetectionEngine(queue, bus, 30);
         engine.addDetector(new SignatureDetector());
         engine.start();
 
         Instant t0 = Instant.parse("2026-11-05T12:00:00Z");
 
-        // First attack from source A (triggers alert 1)
         queue.offer(new NetworkEvent(1L, t0, "10.0.0.100", "10.0.0.1", 80, 500L, EventType.REQUEST, true, "DOS_FLOOD_PAYLOAD"));
         assertTrue(firstSourceLatch.await(3, TimeUnit.SECONDS), "First alert from source A must be published");
 
-        // Repeat attack from source A within cooldown (timestamp t0 + 5s < t0 + 30s) -> must be SUPPRESSED
         queue.offer(new NetworkEvent(2L, t0.plusSeconds(5), "10.0.0.100", "10.0.0.1", 80, 500L, EventType.REQUEST, true, "DOS_FLOOD_PAYLOAD"));
         queue.offer(new NetworkEvent(3L, t0.plusSeconds(10), "10.0.0.100", "10.0.0.1", 80, 500L, EventType.REQUEST, true, "DOS_FLOOD_PAYLOAD"));
 
-        // Attack from source B (different source) -> must NOT be suppressed by source A's cooldown
         queue.offer(new NetworkEvent(4L, t0.plusSeconds(15), "10.0.0.200", "10.0.0.1", 80, 500L, EventType.REQUEST, true, "DOS_FLOOD_PAYLOAD"));
 
-        // Wait for source B to be processed (due to FIFO ordering, source A events are processed first)
         assertTrue(secondSourceLatch.await(3, TimeUnit.SECONDS), "Alert from different source B must be published");
 
         engine.stop();

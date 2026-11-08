@@ -26,7 +26,6 @@ function renderStage() {
 }
 
 beforeAll(() => {
-  // The stage probes for WebGL once and caches the answer, so answer yes and start in 3D.
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
     () => ({ getExtension: () => ({ loseContext: () => undefined }) }) as unknown as RenderingContext,
   );

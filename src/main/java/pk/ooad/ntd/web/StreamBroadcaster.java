@@ -1,6 +1,7 @@
 package pk.ooad.ntd.web;
 
 import pk.ooad.ntd.detection.AlertListener;
+import pk.ooad.ntd.detection.AlertUpdateListener;
 import pk.ooad.ntd.domain.Alert;
 import pk.ooad.ntd.util.ConfigManager;
 
@@ -16,15 +17,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
-public class StreamBroadcaster implements AlertListener {
+public class StreamBroadcaster implements AlertListener, AlertUpdateListener {
     private final int recentMax;
     private final long networkIntervalNanos;
 
     private final Set<SseClient> clients = ConcurrentHashMap.newKeySet();
     private final Deque<Alert> recent = new ArrayDeque<>();
+    private final AtomicLong frames = new AtomicLong();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "ntd-stream-network");
         thread.setDaemon(true);
@@ -67,6 +70,14 @@ public class StreamBroadcaster implements AlertListener {
         requestNetwork();
     }
 
+    @Override
+    public void onAlertUpdate(Alert a) {
+        if (a == null) {
+            return;
+        }
+        emit("alert", alertJson.apply(a));
+    }
+
     public void addClient(SseClient c) {
         if (c == null) {
             return;
@@ -94,10 +105,49 @@ public class StreamBroadcaster implements AlertListener {
         }
     }
 
+    public Alert findAlert(String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        synchronized (recent) {
+            for (Alert alert : recent) {
+                if (id.equals(alert.getId())) {
+                    return alert;
+                }
+            }
+            return null;
+        }
+    }
+
+    public void seed(List<Alert> history) {
+        if (history == null || history.isEmpty()) {
+            return;
+        }
+        synchronized (recent) {
+            for (Alert alert : history) {
+                if (alert == null) {
+                    continue;
+                }
+                recent.addLast(alert);
+                while (recent.size() > recentMax) {
+                    recent.removeFirst();
+                }
+            }
+        }
+    }
+
     public int getAlertCount() {
         synchronized (recent) {
             return recent.size();
         }
+    }
+
+    public int getClientCount() {
+        return clients.size();
+    }
+
+    public long getEmittedFrames() {
+        return frames.get();
     }
 
     public void broadcastState() {
@@ -181,6 +231,7 @@ public class StreamBroadcaster implements AlertListener {
         }
         try {
             client.sendEvent(event, data);
+            frames.incrementAndGet();
         } catch (RuntimeException ignored) {
             removeClient(client);
         }

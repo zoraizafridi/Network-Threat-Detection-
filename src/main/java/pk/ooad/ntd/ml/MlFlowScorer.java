@@ -2,6 +2,7 @@ package pk.ooad.ntd.ml;
 
 import pk.ooad.ntd.detection.AlertBus;
 import pk.ooad.ntd.detection.AlertGate;
+import pk.ooad.ntd.detection.AlertListener;
 import pk.ooad.ntd.domain.Alert;
 import pk.ooad.ntd.domain.AlertFactory;
 import pk.ooad.ntd.domain.AttackType;
@@ -11,6 +12,7 @@ import pk.ooad.ntd.util.ConfigManager;
 import pk.ooad.ntd.util.EventLog;
 import pk.ooad.ntd.util.LogLevel;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -25,33 +27,12 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
-/**
- * Scores completed flows against a model of what recent traffic looked like.
- *
- * <p>The model learns from the same feed it scores. That is deliberate: a
- * deployment has no labelled attack corpus, so "unlike the last few thousand
- * connections" is the only statement it can honestly make. The consequence is
- * that the status is explicit about the model's state, because a cold model
- * says nothing rather than saying everything is fine.</p>
- *
- * <p>Training happens on a single background thread and never on the detection
- * thread. A flow that arrives while training runs is scored with the previous
- * model, and a flow that arrives while there is no model is only counted. Both
- * choices keep the detection loop from stalling behind arithmetic.</p>
- *
- * <p>Alerts land in {@link AttackType#DATA_TRANSFER} because the domain enum is
- * a closed set; the detector name and the description carry the precise
- * meaning ("ml-anomaly", the score, the flow tuple).</p>
- */
 public final class MlFlowScorer implements AutoCloseable {
 
     public static final String DETECTOR_NAME = "MlFlowScorer";
 
-    /**
-     * What the model is doing right now. {@code cold} means too few samples to
-     * learn from, {@code ready} means scoring is live.
-     */
     public record Status(
             boolean enabled,
             String modelState,
@@ -62,6 +43,7 @@ public final class MlFlowScorer implements AutoCloseable {
             long scored,
             long anomalies,
             long alerts,
+            long excluded,
             String lastError) {
     }
 
@@ -78,6 +60,9 @@ public final class MlFlowScorer implements AutoCloseable {
     private final Severity alertSeverity;
     private final long cooldownMillis;
     private final int maxTrackedSources;
+    private final boolean excludeAlerted;
+    private final long exclusionMillis;
+    private final int maxAlertedPairs;
 
     private final Deque<FlowFeatures> training = new ArrayDeque<>();
     private final AtomicBoolean trainingRunning = new AtomicBoolean(false);
@@ -85,10 +70,16 @@ public final class MlFlowScorer implements AutoCloseable {
     private final AtomicLong scored = new AtomicLong();
     private final AtomicLong anomalies = new AtomicLong();
     private final AtomicLong alerts = new AtomicLong();
+    private final AtomicLong excludedSamples = new AtomicLong();
+    private final AtomicLong generation = new AtomicLong();
     private volatile AnomalyModel model;
+    private volatile long trainingGeneration = -1;
     private volatile Instant lastTrainedAt;
     private volatile String lastError;
     private final Map<String, Instant> lastAlertAt = new HashMap<>();
+    private final Map<String, Instant> alertedPairs = new HashMap<>();
+    private final AlertListener alertListener = this::rememberAlertedPair;
+    private Consumer<Status> listener = status -> { };
     private ScheduledExecutorService retrainer;
 
     public MlFlowScorer(AlertBus alertBus, AlertGate gate) {
@@ -106,12 +97,23 @@ public final class MlFlowScorer implements AutoCloseable {
                 (long) config.getInt("ml.seed", 42),
                 severity(config.getString("ml.alertSeverity", "LOW")),
                 config.getInt("ml.cooldownSeconds", 300),
-                config.getInt("ml.maxTrackedSources", 2000));
+                config.getInt("ml.maxTrackedSources", 2000),
+                Boolean.parseBoolean(config.getString("ml.train.excludeAlerted", "true")),
+                config.getInt("ml.train.exclusionSeconds", 300),
+                config.getInt("ml.train.maxPairs", 5000));
     }
 
     MlFlowScorer(AlertBus alertBus, AlertGate gate, boolean enabled, int k, int minSamples,
                  int retrainSeconds, double threshold, int maxTrainFlows, long seed,
                  Severity alertSeverity, int cooldownSeconds, int maxTrackedSources) {
+        this(alertBus, gate, enabled, k, minSamples, retrainSeconds, threshold, maxTrainFlows, seed,
+                alertSeverity, cooldownSeconds, maxTrackedSources, true, 300, 5000);
+    }
+
+    MlFlowScorer(AlertBus alertBus, AlertGate gate, boolean enabled, int k, int minSamples,
+                 int retrainSeconds, double threshold, int maxTrainFlows, long seed,
+                 Severity alertSeverity, int cooldownSeconds, int maxTrackedSources,
+                 boolean excludeAlerted, int exclusionSeconds, int maxAlertedPairs) {
         this.alertBus = Objects.requireNonNull(alertBus, "alertBus must not be null");
         this.gate = gate == null ? AlertGate.ALLOW_ALL : gate;
         this.enabled = enabled;
@@ -124,18 +126,23 @@ public final class MlFlowScorer implements AutoCloseable {
         this.alertSeverity = alertSeverity == null ? Severity.LOW : alertSeverity;
         this.cooldownMillis = Math.max(0, cooldownSeconds) * 1000L;
         this.maxTrackedSources = Math.max(16, maxTrackedSources);
+        this.excludeAlerted = excludeAlerted;
+        this.exclusionMillis = Math.max(0, exclusionSeconds) * 1000L;
+        this.maxAlertedPairs = Math.max(16, maxAlertedPairs);
         if (enabled) {
             startRetrainer();
+            alertBus.subscribe(alertListener);
         }
     }
 
-    /** Feeds one completed flow into the model, and scores it once there is one. */
     public void onFlow(FlowRecord flow) {
         if (!enabled || flow == null || !flow.ended()) {
             return;
         }
         FlowFeatures features = FeatureVector.of(flow);
-        addTrainingSample(features);
+        if (!excludedFromTraining(flow)) {
+            addTrainingSample(features);
+        }
         AnomalyModel current = model;
         if (current == null) {
             if (sampleCount() >= minSamples) {
@@ -164,25 +171,26 @@ public final class MlFlowScorer implements AutoCloseable {
         alertBus.publish(alert);
     }
 
-    /**
-     * Trains from the samples collected so far, on the calling thread. Returns
-     * false when there is not enough data or another training pass is running.
-     * The demo and the tests use this to remove timing from the picture.
-     */
     public boolean train() {
         if (!enabled || !trainingRunning.compareAndSet(false, true)) {
             return false;
         }
+        long started = generation.get();
+        trainingGeneration = started;
         try {
             List<FlowFeatures> snapshot = snapshot();
             if (snapshot.size() < minSamples) {
                 return false;
             }
             AnomalyModel trained = AnomalyModel.train(snapshot, k, 30, seed);
+            if (generation.get() != started) {
+                return false;
+            }
             model = trained;
             dirty.set(false);
             lastTrainedAt = Instant.now();
             lastError = null;
+            listener.accept(status());
             return true;
         } catch (RuntimeException ex) {
             lastError = ex.getClass().getSimpleName() + ": " + ex.getMessage();
@@ -190,12 +198,17 @@ public final class MlFlowScorer implements AutoCloseable {
                     "Flow model training failed and the previous model stays in place: " + lastError);
             return false;
         } finally {
+            trainingGeneration = -1;
             trainingRunning.set(false);
         }
     }
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    public void setTrainingListener(Consumer<Status> sink) {
+        this.listener = sink == null ? status -> { } : sink;
     }
 
     public int sampleCount() {
@@ -212,13 +225,21 @@ public final class MlFlowScorer implements AutoCloseable {
         return current.score(FeatureVector.of(flow));
     }
 
+    public double scoreFeatures(FlowFeatures features) {
+        AnomalyModel current = model;
+        if (!enabled || current == null || features == null) {
+            return 0.0;
+        }
+        return current.score(features);
+    }
+
     public Status status() {
         AnomalyModel current = model;
         String state;
         if (!enabled) {
             state = "disabled";
         } else if (current == null) {
-            state = trainingRunning.get() ? "training" : "cold";
+            state = trainingRunning.get() && trainingGeneration == generation.get() ? "training" : "cold";
         } else {
             state = "ready";
         }
@@ -226,17 +247,20 @@ public final class MlFlowScorer implements AutoCloseable {
                 current == null ? 0 : current.clusters(),
                 threshold,
                 lastTrainedAt == null ? "" : lastTrainedAt.toString(),
-                scored.get(), anomalies.get(), alerts.get(),
+                scored.get(), anomalies.get(), alerts.get(), excludedSamples.get(),
                 lastError == null ? "" : lastError);
     }
 
-    /** Synchronous reset: drops the model and the samples it learned from. */
     public void reset() {
+        generation.incrementAndGet();
         synchronized (training) {
             training.clear();
         }
         synchronized (lastAlertAt) {
             lastAlertAt.clear();
+        }
+        synchronized (alertedPairs) {
+            alertedPairs.clear();
         }
         model = null;
         lastTrainedAt = null;
@@ -245,10 +269,12 @@ public final class MlFlowScorer implements AutoCloseable {
         scored.set(0);
         anomalies.set(0);
         alerts.set(0);
+        excludedSamples.set(0);
     }
 
     @Override
     public void close() {
+        alertBus.unsubscribe(alertListener);
         if (retrainer != null) {
             retrainer.shutdownNow();
             retrainer = null;
@@ -290,11 +316,46 @@ public final class MlFlowScorer implements AutoCloseable {
                     train();
                 }
             } catch (RuntimeException ex) {
-                // A scheduled task that throws is cancelled for good, which
-                // would silently stop all future learning.
                 lastError = ex.getClass().getSimpleName() + ": " + ex.getMessage();
             }
         }, retrainSeconds, retrainSeconds, TimeUnit.SECONDS);
+    }
+
+    private boolean excludedFromTraining(FlowRecord flow) {
+        if (!excludeAlerted || exclusionMillis <= 0) {
+            return false;
+        }
+        Instant at = flow.endTime() != null ? flow.endTime() : flow.startTime();
+        if (at == null) {
+            return false;
+        }
+        Instant alertAt;
+        synchronized (alertedPairs) {
+            alertAt = alertedPairs.get(pairKey(flow.srcIp(), flow.dstIp()));
+        }
+        if (alertAt == null
+                || Math.abs(Duration.between(alertAt, at).toMillis()) > exclusionMillis) {
+            return false;
+        }
+        excludedSamples.incrementAndGet();
+        return true;
+    }
+
+    private void rememberAlertedPair(Alert alert) {
+        if (!excludeAlerted || alert == null) {
+            return;
+        }
+        String key = pairKey(alert.getSourceIp(), alert.getTargetIp());
+        synchronized (alertedPairs) {
+            if (alertedPairs.size() >= maxAlertedPairs && !alertedPairs.containsKey(key)) {
+                alertedPairs.clear();
+            }
+            alertedPairs.put(key, alert.getTimestamp());
+        }
+    }
+
+    private static String pairKey(String source, String target) {
+        return (source == null ? "" : source) + "|" + (target == null ? "" : target);
     }
 
     private boolean coolingDown(String source, Instant when) {

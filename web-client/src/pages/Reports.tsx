@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { readJson } from "../api";
+import { exportUrl, readJson } from "../api";
 import { EmptyState, Page, Panel, StatusBadge } from "../components/ui";
 import { relativeTime } from "../format";
 import { useApp } from "../store";
@@ -99,6 +99,26 @@ export function ReportsPage() {
         <article className="stat-tile"><strong className="stat-value">{hosts}</strong><span>Hosts affected</span></article>
       </div>
       <div className="plan-grid report-section">
+        <Panel
+          className="span-12 no-print"
+          title="Export records"
+          subtitle="Server-rendered CSV or JSON. Every response carries the SHA-256 of its own body in X-Content-SHA256."
+        >
+          <table>
+            <thead>
+              <tr><th>Records</th><th>CSV</th><th>JSON</th></tr>
+            </thead>
+            <tbody>
+              {(["incidents", "alerts", "events", "flows"] as const).map((kind) => (
+                <tr key={kind}>
+                  <td>{kind}</td>
+                  <td><a href={exportUrl(kind, "csv")} download>Download CSV</a></td>
+                  <td><a href={exportUrl(kind, "json")} download>Download JSON</a></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
         <Panel className="span-6" title="Incidents by severity">
           {incidents.length === 0 ? <EmptyState>No incidents yet.</EmptyState> : counts.map((row) => (
             <p key={row.level}><StatusBadge status={row.level} /> <span className="risk-bar"><i style={{ width: `${(row.count / peak) * 100}%`, background: "var(--info)" }} /></span> {row.count}</p>

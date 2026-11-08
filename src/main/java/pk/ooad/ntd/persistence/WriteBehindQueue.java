@@ -15,24 +15,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
-/**
- * A bounded queue drained by one daemon thread in batches.
- *
- * <p>Nothing on the detection path may block on disk, so {@link #offer} never
- * waits: when the queue is full the newest item is refused and counted. That
- * keeps memory bounded and makes the loss visible in
- * {@link PersistenceStatus} instead of hiding it.</p>
- *
- * <p>The worker survives a failing sink. A batch that throws is counted as
- * dropped and logged once per outage, then the loop continues, so a locked or
- * deleted database file cannot take the detector down with it.</p>
- *
- * <p>{@link #flush} is a durability barrier rather than a queue-length check: a
- * batch that has been taken off the queue but not yet committed still counts as
- * in flight, so a caller that flushes and then reads sees the rows.</p>
- *
- * @param <T> the row type being buffered
- */
 final class WriteBehindQueue<T> implements AutoCloseable {
 
     interface BatchSink<T> {
@@ -65,7 +47,6 @@ final class WriteBehindQueue<T> implements AutoCloseable {
         this.worker.start();
     }
 
-    /** Returns false when the item was refused because the queue is full. */
     boolean offer(T item) {
         if (item == null) {
             return false;
@@ -83,11 +64,6 @@ final class WriteBehindQueue<T> implements AutoCloseable {
         }
     }
 
-    /**
-     * Waits until the queue is empty and the last batch has been committed.
-     *
-     * @return true if the queue really did drain inside the budget
-     */
     boolean flush(long timeoutMillis) {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
         while (System.nanoTime() < deadline) {
@@ -134,8 +110,6 @@ final class WriteBehindQueue<T> implements AutoCloseable {
             pending.notifyAll();
         }
         try {
-            // The loop keeps draining after close, so this join is bounded by the
-            // remaining backlog rather than by the flush interval.
             worker.join(5000);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -158,9 +132,6 @@ final class WriteBehindQueue<T> implements AutoCloseable {
                     }
                 }
                 drainInto(batch);
-                // Marked before the lock is released: a flush that sees an empty
-                // queue still has to wait for this batch to reach the disk, so
-                // "drained" and "committed" cannot be confused.
                 if (!batch.isEmpty()) {
                     writing.set(true);
                 }
@@ -186,8 +157,6 @@ final class WriteBehindQueue<T> implements AutoCloseable {
             lastFlush.set(Instant.now());
             faultLogged.set(false);
         } catch (Exception ex) {
-            // The description is published before the dropped count, so a reader
-            // that watches the counter always finds the reason behind it.
             lastError.set(String.valueOf(ex));
             dropped.addAndGet(batch.size());
             if (faultLogged.compareAndSet(false, true)) {

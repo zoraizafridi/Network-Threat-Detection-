@@ -36,4 +36,3 @@ public class Server extends NetworkAsset {
         }
     }
 }
-

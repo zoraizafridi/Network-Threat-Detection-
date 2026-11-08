@@ -18,13 +18,5 @@ evidence/
 *.db
 *.db-wal
 *.db-shm
-
-.qoder/
-.tools/
-data/
-evidence/
-target/
-node_modules/
-*.db
 !src/main/resources/samples/*.log
 !src/test/resources/samples/*.log

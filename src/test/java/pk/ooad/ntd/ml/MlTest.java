@@ -23,9 +23,14 @@ class MlTest {
 
     private static final Instant BASE = Instant.parse("2026-11-08T08:00:00Z");
 
-    private static FlowRecord flow(int index, long bytesOut, long packets, long durationMs, Instant at) {
-        return new FlowRecord("f" + index, "10.0.0.5", "10.0.0.9", 40_000 + (index % 5), 443, "TCP",
+    private static FlowRecord flowFrom(String src, int index, long bytesOut, long packets,
+                                       long durationMs, Instant at) {
+        return new FlowRecord("f" + index, src, "10.0.0.9", 40_000 + (index % 5), 443, "TCP",
                 bytesOut, 0L, packets, at, at.plusMillis(durationMs), List.of("OK"), "REQUEST", true, true);
+    }
+
+    private static FlowRecord flow(int index, long bytesOut, long packets, long durationMs, Instant at) {
+        return flowFrom("10.0.0.5", index, bytesOut, packets, durationMs, at);
     }
 
     private static List<FlowRecord> normalFlows(int count) {
@@ -114,19 +119,20 @@ class MlTest {
             assertEquals(0.0, scorer.score(flow(99, 1_000, 3, 500, BASE)), 1e-12);
 
             normalFlows(40).forEach(scorer::onFlow);
-            assertEquals(45, scorer.sampleCount());
+            int samples = scorer.sampleCount();
+            assertEquals(45, samples + scorer.status().excluded(),
+                    "every flow either trains the model or is kept out because its pair alerted");
+            assertTrue(samples >= 20, "the model still holds the samples it needs");
             waitUntilReady(scorer);
             MlFlowScorer.Status ready = scorer.status();
             assertTrue(ready.clusters() >= 1 && ready.clusters() <= 2);
             assertEquals(0.5, ready.threshold(), 1e-12);
             assertTrue(!ready.lastTrainedAt().isEmpty());
 
-            FlowRecord outlier = flow(41, 50_000_000, 900_000, 900_000, BASE.plusSeconds(100));
+            FlowRecord outlier = flowFrom("10.0.0.77", 41, 50_000_000, 900_000, 900_000,
+                    BASE.plusSeconds(100));
             assertTrue(scorer.score(outlier) >= 0.5, "an extreme flow must score above the threshold");
 
-            // The model learns from the stream it scores, so a few warm-up flows
-            // sit at the edge of what it learned and alert on their own. The
-            // outlier is what this test is about, so the outbox starts empty.
             received.clear();
             scorer.onFlow(outlier);
             assertEquals(1, received.size(), "the outlier raises exactly one alert");
@@ -137,7 +143,8 @@ class MlTest {
             assertTrue(alert.getDescription().contains("threshold 0.500"));
             assertTrue(alert.isSimulated(), "the simulated flag is carried through");
 
-            scorer.onFlow(flow(42, 40_000_000, 800_000, 900_000, BASE.plusSeconds(101)));
+            scorer.onFlow(flowFrom("10.0.0.77", 42, 40_000_000, 800_000, 900_000,
+                    BASE.plusSeconds(101)));
             assertEquals(1, received.size(), "the per-source cooldown holds the second alert back");
             assertTrue(scorer.status().anomalies() >= 2);
             assertTrue(scorer.status().scored() >= 2);

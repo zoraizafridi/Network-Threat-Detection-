@@ -3,11 +3,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AdminPage } from "../src/pages/Admin";
 import { useApp } from "../src/store";
 
-/**
- * Everything the operations panels read, behind one mutable world so each test
- * can shift a single field (a capability switched off, a 409 from a mutation)
- * without restating the whole payload.
- */
 const world = vi.hoisted(() => {
   const defaults = () => ({
     config: {
@@ -28,9 +23,71 @@ const world = vi.hoisted(() => {
       scored: 240,
       anomalies: 4,
       alerts: 2,
+      excluded: 0,
       lastError: "",
     },
-    correlation: { enabled: true, trackedSources: 3, signals: 9, correlated: 2, minSignals: 3, windowSeconds: 120 },
+    dataset: {
+      samples: 120,
+      attackSamples: 80,
+      benignSamples: 40,
+      runs: 2,
+      runIds: ["run-1", "run-2"],
+      lastAddedAt: "2026-11-08T08:00:00Z",
+    },
+    metrics: {
+      uptimeSeconds: 3600,
+      processedEvents: 12000,
+      droppedEvents: 0,
+      queueDepth: 2,
+      detectedAlerts: 40,
+      deliveredAlerts: 38,
+      activeAlerts: 6,
+      streamClients: 1,
+      streamFrames: 900,
+      flowsActive: 12,
+      flowsClosed: 300,
+      storeEnabled: true,
+      flowRows: 40,
+      alertRows: 3,
+      queuedRows: 0,
+      writtenRows: 43,
+      droppedRows: 0,
+      modelState: "TRAINED",
+      modelSamples: 120,
+      modelScored: 240,
+      anomalies: 4,
+      excludedFromTraining: 0,
+      importState: "IDLE",
+      importReplayed: 0,
+      heapUsedBytes: 134217728,
+      heapMaxBytes: 536870912,
+      liveThreads: 18,
+    },
+    intel: {
+      enabled: true,
+      feed: "config/intel.json",
+      wired: true,
+      entries: 50,
+      addresses: 20,
+      domains: 15,
+      digests: 15,
+      skipped: 0,
+      expired: 1,
+      source: "config/intel.json",
+      lastReloadAt: null,
+    },
+    correlation: {
+      enabled: true,
+      trackedSources: 3,
+      signals: 9,
+      correlated: 2,
+      minSignals: 3,
+      windowSeconds: 120,
+      chains: 3,
+      chainsMatched: 1,
+      lastChain: "scan-to-exfil",
+      chainProblem: "",
+    },
     containment: {
       enabled: true,
       auto: false,
@@ -45,9 +102,20 @@ const world = vi.hoisted(() => {
           automatic: false,
         },
       ],
+      mode: "IPS",
+      minSeverity: "HIGH",
       droppedEvents: 0,
       automaticActions: 0,
       expiredActions: 1,
+      refusedActions: 0,
+      safeguards: {
+        allowlist: ["10.0.0.1"],
+        maxPerMinute: 5,
+        partitionCheck: true,
+        refusedAllowlist: 0,
+        refusedRateLimit: 0,
+        refusedPartition: 0,
+      },
     },
     notifications: {
       enabled: true,
@@ -68,8 +136,38 @@ const world = vi.hoisted(() => {
           targetIp: "10.0.0.9",
           summary: "Port scan from 10.0.0.5",
           channel: "log",
+          escalation: false,
         },
       ],
+      health: {
+        console: true,
+        email: false,
+        emailRecipient: "",
+        webhookHost: "",
+        webhookRefusal: "",
+        breakerOpen: false,
+        consecutiveFailures: 0,
+        breakerUntil: "",
+        suppressed: 0,
+        rateLimited: 0,
+        cooldownSkipped: 0,
+        refused: 0,
+        consoleSent: 2,
+        emailSent: 0,
+        emailFailed: 0,
+      },
+      settings: {
+        retries: 2,
+        backoffMillis: 250,
+        breakerThreshold: 5,
+        breakerCooldownSeconds: 60,
+        maxPerHour: 60,
+        cooldownSeconds: 30,
+        maxBodyBytes: 4096,
+        allowInsecure: false,
+        redact: true,
+      },
+      deliveries: [],
     },
     compliance: {
       storeEnabled: true,
@@ -90,6 +188,16 @@ const world = vi.hoisted(() => {
       containedSources: 1,
       forensicsEnabled: true,
       evidenceDirectory: "data/evidence",
+      controls: [
+        {
+          id: "CC6.1",
+          title: "Logical access",
+          status: "MET",
+          evidence: "audit trail keeps the actor and the outcome",
+          indicative: true,
+        },
+      ],
+      mappingNote: "The control mapping is indicative, not a certification.",
     },
     audit: {
       entries: [
@@ -116,9 +224,30 @@ const world = vi.hoisted(() => {
       failed: 0,
       capacity: 500,
     },
+    suppression: {
+      enabled: true,
+      file: "config/suppression-rules.json",
+      count: 1,
+      rules: [
+        {
+          id: "sr-00000001",
+          detector: "AnomalyDetector",
+          attackType: "DATA_TRANSFER",
+          sourceIp: "10.0.0.5",
+          targetIp: "",
+          maxSeverity: "LOW",
+          note: "nightly backup",
+          createdBy: "admin",
+          createdAt: "2026-11-08T08:00:00Z",
+          enabled: true,
+          describe: "detector AnomalyDetector, type DATA_TRANSFER, source 10.0.0.5, any target, at or below LOW",
+        },
+      ],
+    },
     blockStatus: 0,
     releaseStatus: 0,
     exportStatus: 0,
+    suppressionStatus: 0,
   });
 
   const state = { ...defaults(), calls: [] as string[] };
@@ -143,8 +272,10 @@ vi.mock("../src/api", async (importOriginal) => {
     loadNotifications: async () => state.notifications,
     loadCompliance: async () => state.compliance,
     loadAudit: async () => state.audit,
-    // The mutations are recorded before they can refuse, so a test can assert
-    // both the request that was sent and the message the panel shows for it.
+    loadSuppressionRules: async () => state.suppression,
+    loadMlDataset: async () => state.dataset,
+    loadMetrics: async () => state.metrics,
+    loadIntelStatus: async () => state.intel,
     containSource: async (ip: string, minutes: number, reason: string) => {
       state.calls.push(`block ${ip} ${minutes} ${reason}`);
       if (state.blockStatus !== 0) {
@@ -170,6 +301,37 @@ vi.mock("../src/api", async (importOriginal) => {
         manifestSha256: "0123456789abcdef0123456789abcdef",
       };
     },
+    addSuppressionRule: async (rule: { detector: string; attackType: string; sourceIp: string; targetIp: string; maxSeverity: string; note: string }) => {
+      state.calls.push(
+        `rule add ${rule.detector}|${rule.attackType}|${rule.sourceIp}|${rule.targetIp}|${rule.maxSeverity}|${rule.note}`,
+      );
+      if (state.suppressionStatus !== 0) {
+        throw new actual.HttpStatusError(state.suppressionStatus);
+      }
+      return {
+        ...rule,
+        id: "sr-00000002",
+        enabled: true,
+        createdBy: "admin",
+        createdAt: "2026-11-08T09:10:00Z",
+        describe: "detector AnomalyDetector, any type, any source, any target, at or below LOW",
+      };
+    },
+    removeSuppressionRule: async (id: string) => {
+      state.calls.push(`rule remove ${id}`);
+      if (state.suppressionStatus !== 0) {
+        throw new actual.HttpStatusError(state.suppressionStatus);
+      }
+    },
+    evaluateModel: async () => ({
+      available: true,
+      threshold: 0.9,
+      chosen: { precision: 0.8, recall: 0.75, f1: 0.77, falsePositiveRate: 0.05, accuracy: 0.9 },
+      best: { threshold: 0.85, precision: 0.82, recall: 0.78, f1: 0.80, falsePositiveRate: 0.04, accuracy: 0.91 },
+      rules: { alerted: 12, precision: 0.6, recall: 0.5, f1: 0.54, falsePositiveRate: 0.1, accuracy: 0.8 },
+      sweep: [],
+      runs: [],
+    }),
   };
 });
 
@@ -185,11 +347,22 @@ describe("admin operations", () => {
     render(<AdminPage />);
 
     expect(
-      await screen.findByText("120 samples, 3 clusters, threshold 0.92, 240 scored, 4 anomalies, 2 alerts"),
+      await screen.findByText(
+        "120 samples, 3 clusters, threshold 0.92, 240 scored, 4 anomalies, 2 alerts, 0 excluded from training",
+      ),
     ).toBeTruthy();
     expect(screen.getByText("2 correlated from 9 signals, 3 signal minimum, 120s window")).toBeTruthy();
-    expect(screen.getByText("1 blocked, enforcement off, 0 events dropped")).toBeTruthy();
+    expect(screen.getByText("IPS")).toBeTruthy();
+    expect(screen.getByText("3 rules, 1 matched, last scan-to-exfil")).toBeTruthy();
+    expect(screen.getByText("1 blocked, 0 events dropped, 0 refused by a safeguard")).toBeTruthy();
+    expect(
+      screen.getByText(/events processed, 2 queued, 0 dropped, 40 detected, 38 delivered/),
+    ).toBeTruthy();
     expect(screen.getByText("2 recorded, 0 sent, 0 failed, 0 dropped")).toBeTruthy();
+    expect(
+      screen.getByText("120 labelled flows (80 attack, 40 benign) from 2 replay runs"),
+    ).toBeTruthy();
+    expect(screen.getByText("50 (20 addresses, 15 domains, 15 digests)")).toBeTruthy();
   });
 
   test("a capability that is switched off says so instead of hiding", async () => {
@@ -197,7 +370,9 @@ describe("admin operations", () => {
     render(<AdminPage />);
 
     expect(
-      await screen.findByText("Containment is off. Set containment.enabled=true to record blocks."),
+      await screen.findByText(
+        "Containment is off. Switch the mode to IDS or IPS on the Control page to record blocks.",
+      ),
     ).toBeTruthy();
     expect(screen.getByText("No addresses are contained.")).toBeTruthy();
   });
@@ -205,8 +380,6 @@ describe("admin operations", () => {
   test("a blocked address is listed with its reason and the account behind it", async () => {
     render(<AdminPage />);
 
-    // The address and the actor also appear in the audit trail, so the row is
-    // the unit of assertion rather than the page.
     const row = (await screen.findByText("repeat scanner")).closest("tr") as HTMLElement;
     expect(within(row).getByText("203.0.113.9")).toBeTruthy();
     expect(within(row).getByText("admin")).toBeTruthy();
@@ -215,7 +388,7 @@ describe("admin operations", () => {
 
   test("blocking an address sends the order and reports it", async () => {
     render(<AdminPage />);
-    await screen.findByText(/1 blocked, enforcement off/);
+    await screen.findByText(/1 blocked, 0 events dropped/);
 
     fireEvent.change(screen.getByLabelText("Address to contain"), { target: { value: "198.51.100.7" } });
     fireEvent.change(screen.getByLabelText("Minutes"), { target: { value: "15" } });
@@ -229,20 +402,22 @@ describe("admin operations", () => {
   test("a 409 on block names the flag that turns containment on", async () => {
     world.state.blockStatus = 409;
     render(<AdminPage />);
-    await screen.findByText(/1 blocked, enforcement off/);
+    await screen.findByText(/1 blocked, 0 events dropped/);
 
     fireEvent.change(screen.getByLabelText("Address to contain"), { target: { value: "198.51.100.7" } });
     fireEvent.click(screen.getByRole("button", { name: "Block" }));
 
     expect(
-      await screen.findByText("Containment is off on this server. Set containment.enabled=true to use it."),
+      await screen.findByText(
+        "The server refused the block. Containment may be off, or a safeguard refused it.",
+      ),
     ).toBeTruthy();
   });
 
   test("releasing an address that is not blocked says so", async () => {
     world.state.releaseStatus = 404;
     render(<AdminPage />);
-    await screen.findByText(/1 blocked, enforcement off/);
+    await screen.findByText(/1 blocked, 0 events dropped/);
 
     fireEvent.click(screen.getByRole("button", { name: "Release" }));
 
@@ -256,9 +431,6 @@ describe("admin operations", () => {
     expect(await screen.findByText("containment.block")).toBeTruthy();
     expect(screen.getByText("Allowed")).toBeTruthy();
 
-    // The badge renders the readable label rather than the stored enum name,
-    // and the actor name is repeated in the accounts panel, so the row is the
-    // unit of assertion.
     const row = (screen.getByText("auth.login")).closest("tr") as HTMLElement;
     expect(within(row).getByText("viewer")).toBeTruthy();
     expect(within(row).getByText("/api/login")).toBeTruthy();
@@ -298,5 +470,13 @@ describe("admin operations", () => {
     expect(screen.getByText("Access denied for role Viewer")).toBeTruthy();
     expect(screen.queryByText("Operations status")).toBeNull();
     expect(world.state.calls).toHaveLength(0);
+  });
+
+  test("the model evaluation panel shows the in-sample notice after a run", async () => {
+    render(<AdminPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run evaluation" }));
+
+    expect(await screen.findByText("In-sample: these flows were also used for training.")).toBeTruthy();
   });
 });

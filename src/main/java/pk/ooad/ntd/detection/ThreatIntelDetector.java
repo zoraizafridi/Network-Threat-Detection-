@@ -9,19 +9,12 @@ import pk.ooad.ntd.intel.IntelEntry;
 import pk.ooad.ntd.intel.ThreatIntel;
 import pk.ooad.ntd.util.ConfigManager;
 
+import java.util.Locale;
 import java.util.Optional;
 
-/**
- * Raises an alert when an event's source is listed in the threat feed.
- *
- * <p>The feed decides <em>whether</em> to alert; the event decides which
- * {@link AttackType} bucket it lands in, because the existing four buckets are
- * the ones the UI and the incident correlation understand. The precise reason
- * lives in the description, which names the matched entry and its label.</p>
- */
 public class ThreatIntelDetector extends Detector {
 
-    private final ThreatIntel intel;
+    private volatile ThreatIntel intel;
     private final boolean enabled;
 
     public ThreatIntelDetector() {
@@ -31,22 +24,33 @@ public class ThreatIntelDetector extends Detector {
 
     public ThreatIntelDetector(String name, ThreatIntel intel, boolean enabled) {
         super(name != null ? name : "ThreatIntelDetector");
-        this.intel = intel == null ? ThreatIntel.parse("", "none", Severity.HIGH) : intel;
+        this.intel = intel == null ? ThreatIntel.empty("none") : intel;
         this.enabled = enabled;
     }
 
     @Override
     public Optional<Alert> analyze(NetworkEvent e) {
-        if (!enabled || e == null || e.sourceIp() == null) {
+        if (!enabled || e == null) {
             return Optional.empty();
         }
-        Optional<IntelEntry> hit = intel.match(e.sourceIp());
-        if (hit.isEmpty()) {
-            return Optional.empty();
+        ThreatIntel feed = intel;
+        IntelEntry entry;
+        String where;
+        Optional<IntelEntry> byAddress = feed.match(e.sourceIp());
+        if (byAddress.isPresent()) {
+            entry = byAddress.get();
+            where = "Source " + e.sourceIp() + " matches";
+        } else {
+            Optional<IntelEntry> byPayload = feed.matchPayload(e.payload());
+            if (byPayload.isEmpty()) {
+                return Optional.empty();
+            }
+            entry = byPayload.get();
+            where = "Payload from " + e.sourceIp() + " carries";
         }
-        IntelEntry entry = hit.get();
-        String description = "Source " + e.sourceIp() + " matches threat feed entry "
-                + entry.cidr() + " (" + entry.label() + ")";
+        String description = where + " threat feed " + entry.type().name().toLowerCase(Locale.ROOT)
+                + " indicator " + entry.value() + " (" + entry.label() + ", category "
+                + entry.category() + ", confidence " + entry.confidence() + ")";
         return Optional.of(alertFactory.create(
                 entry.severity(),
                 attackTypeFor(e.type()),
@@ -57,9 +61,16 @@ public class ThreatIntelDetector extends Detector {
                 e.timestamp()));
     }
 
+    public void reload(ThreatIntel feed) {
+        this.intel = feed == null ? ThreatIntel.empty("none") : feed;
+    }
+
+    public ThreatIntel feed() {
+        return intel;
+    }
+
     @Override
     public void reset() {
-        // Stateless: the feed is read once at construction.
     }
 
     public boolean isEnabled() {

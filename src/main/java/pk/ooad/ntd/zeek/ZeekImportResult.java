@@ -4,13 +4,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 
-/**
- * Outcome of one import.
- *
- * <p>{@code skipped} lines are reported rather than silently swallowed: a field
- * that is missing from a Zeek log is a fact about the file, and pretending the
- * line was imported would inflate the counts an analyst relies on.</p>
- */
 public record ZeekImportResult(
         String source,
         long linesRead,

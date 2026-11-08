@@ -32,7 +32,7 @@ class PlannersTest {
 
     @AfterEach
     void restoreConfig() {
-        CONFIG.load("src/main/resources/config.properties");
+        CONFIG.reload();
     }
 
     @Test

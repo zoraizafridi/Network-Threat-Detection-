@@ -15,7 +15,6 @@ public class TopologyLoader {
         Network network = new Network();
         AssetFactory factory = new AssetFactory();
 
-        // Routers (3)
         NetworkAsset r1 = factory.create(AssetType.ROUTER, "rt-core-1", "Core Router 1", "10.0.0.1", 5);
         NetworkAsset r2 = factory.create(AssetType.ROUTER, "rt-core-2", "Core Router 2", "10.0.0.2", 5);
         NetworkAsset r3 = factory.create(AssetType.ROUTER, "rt-dist-1", "Distribution Router 1", "10.0.0.3", 4);
@@ -24,7 +23,6 @@ public class TopologyLoader {
         network.addAsset(r2);
         network.addAsset(r3);
 
-        // Servers (4)
         NetworkAsset s1 = factory.create(AssetType.SERVER, "srv-web-1", "Web Server 1", "10.0.1.10", 4);
         NetworkAsset s2 = factory.create(AssetType.SERVER, "srv-web-2", "Web Server 2", "10.0.1.11", 4);
         NetworkAsset s3 = factory.create(AssetType.SERVER, "srv-db-1", "Database Server 1", "10.0.1.20", 5);
@@ -35,7 +33,6 @@ public class TopologyLoader {
         network.addAsset(s3);
         network.addAsset(s4);
 
-        // Workstations (6)
         NetworkAsset w1 = factory.create(AssetType.WORKSTATION, "ws-ops-1", "Ops Workstation 1", "10.0.2.1", 3);
         NetworkAsset w2 = factory.create(AssetType.WORKSTATION, "ws-ops-2", "Ops Workstation 2", "10.0.2.2", 3);
         NetworkAsset w3 = factory.create(AssetType.WORKSTATION, "ws-fin-1", "Finance Workstation 1", "10.0.2.11", 3);
@@ -50,7 +47,6 @@ public class TopologyLoader {
         network.addAsset(w5);
         network.addAsset(w6);
 
-        // IoT Devices (5)
         NetworkAsset i1 = factory.create(AssetType.IOT_DEVICE, "iot-cam-1", "Building Camera 1", "10.0.3.1", 2);
         NetworkAsset i2 = factory.create(AssetType.IOT_DEVICE, "iot-cam-2", "Building Camera 2", "10.0.3.2", 2);
         NetworkAsset i3 = factory.create(AssetType.IOT_DEVICE, "iot-sensor-1", "Temperature Sensor 1", "10.0.3.10", 1);
@@ -63,13 +59,10 @@ public class TopologyLoader {
         network.addAsset(i4);
         network.addAsset(i5);
 
-        // Links with cycles
-        // Router backbone triangle cycle (Cycle 1)
         network.addLink(new Link("link-r1-r2", r1, r2, 1.0, 1000.0));
         network.addLink(new Link("link-r2-r3", r2, r3, 1.0, 1000.0));
         network.addLink(new Link("link-r3-r1", r3, r1, 1.0, 1000.0));
 
-        // Server redundant connections (Cycle 2 and Cycle 3)
         network.addLink(new Link("link-s1-r1", s1, r1, 2.0, 500.0));
         network.addLink(new Link("link-s1-r2", s1, r2, 2.0, 500.0));
         network.addLink(new Link("link-s2-r2", s2, r2, 2.0, 500.0));
@@ -77,7 +70,6 @@ public class TopologyLoader {
         network.addLink(new Link("link-s3-r1", s3, r1, 2.0, 500.0));
         network.addLink(new Link("link-s4-r2", s4, r2, 2.0, 500.0));
 
-        // Workstation connections (Cycle 4)
         network.addLink(new Link("link-w1-r3", w1, r3, 3.0, 100.0));
         network.addLink(new Link("link-w2-r3", w2, r3, 3.0, 100.0));
         network.addLink(new Link("link-w1-w2", w1, w2, 2.0, 100.0));
@@ -86,7 +78,6 @@ public class TopologyLoader {
         network.addLink(new Link("link-w5-r3", w5, r3, 2.5, 100.0));
         network.addLink(new Link("link-w6-r3", w6, r3, 3.0, 100.0));
 
-        // IoT connections
         network.addLink(new Link("link-i1-r3", i1, r3, 4.0, 50.0));
         network.addLink(new Link("link-i2-r3", i2, r3, 4.0, 50.0));
         network.addLink(new Link("link-i3-r3", i3, r3, 4.0, 20.0));
@@ -224,4 +215,3 @@ public class TopologyLoader {
         return tokens;
     }
 }
-

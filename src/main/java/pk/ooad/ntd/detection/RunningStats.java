@@ -52,4 +52,3 @@ public class RunningStats {
         this.m2 = 0.0;
     }
 }
-

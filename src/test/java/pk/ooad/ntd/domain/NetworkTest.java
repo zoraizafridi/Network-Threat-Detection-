@@ -154,4 +154,3 @@ class NetworkTest {
         assertThrows(IllegalArgumentException.class, () -> network.getLinksOf(null));
     }
 }
-

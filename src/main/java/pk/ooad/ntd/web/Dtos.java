@@ -14,10 +14,19 @@ public class Dtos {
 
     public record AlertDto(String id, String timestamp, String severity, String attackType,
                            String sourceIp, String targetIp, String detectorName, String description,
-                           boolean simulated) {
+                           boolean simulated, int occurrences, String firstSeen, String lastSeen,
+                           String status) {
         public AlertDto(String id, String timestamp, String severity, String attackType,
                         String sourceIp, String targetIp, String detectorName, String description) {
-            this(id, timestamp, severity, attackType, sourceIp, targetIp, detectorName, description, true);
+            this(id, timestamp, severity, attackType, sourceIp, targetIp, detectorName, description,
+                    true, 1, timestamp, timestamp, "NEW");
+        }
+
+        public AlertDto(String id, String timestamp, String severity, String attackType,
+                        String sourceIp, String targetIp, String detectorName, String description,
+                        boolean simulated) {
+            this(id, timestamp, severity, attackType, sourceIp, targetIp, detectorName, description,
+                    simulated, 1, timestamp, timestamp, "NEW");
         }
     }
 

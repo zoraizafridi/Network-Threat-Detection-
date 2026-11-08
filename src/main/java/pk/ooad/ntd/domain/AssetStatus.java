@@ -5,4 +5,3 @@ public enum AssetStatus {
     SUSPICIOUS,
     COMPROMISED
 }
-

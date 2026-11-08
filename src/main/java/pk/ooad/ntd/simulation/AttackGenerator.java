@@ -10,4 +10,3 @@ public abstract class AttackGenerator {
 
     public abstract List<NetworkEvent> generate(String src, String dst, Instant now, Random rnd);
 }
-

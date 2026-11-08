@@ -42,6 +42,8 @@ class ServiceFeaturesTest {
     void cleanup() throws IOException {
         EventLog.getInstance().clear();
         if (configFile != null) Files.deleteIfExists(configFile);
+        if (configFile != null) ConfigManager.getInstance().reload();
+        configFile = null;
     }
 
     @Test

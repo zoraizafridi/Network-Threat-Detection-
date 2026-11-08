@@ -19,4 +19,3 @@ public record NetworkEvent(
         this(id, timestamp, sourceIp, destIp, port, bytes, type, success, payload, false);
     }
 }
-

@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useReducedMotion } from "../useReducedMotion";
 import { loadIncidents, loadState, request } from "../api";
 import { NavList } from "../components/NavList";
+import { DemoBanner } from "../components/DemoBanner";
 import { usePortalData } from "../components/useStream";
 import { canControlSimulation, navEntries } from "../permissions";
 import { SimControls } from "./Control";
@@ -36,7 +37,6 @@ export function Shell() {
     try {
       await request("/api/logout", { method: "POST" });
     } catch {
-      /* session may already be gone */
     }
     markSignedOut();
     navigate("/login");
@@ -146,6 +146,10 @@ export function Shell() {
     return () => media.removeEventListener("change", apply);
   }, []);
 
+  useEffect(() => {
+    setOverlay(false);
+  }, [location.pathname]);
+
   function toggleNav() {
     if (narrow) {
       setOverlay((open) => !open);
@@ -156,7 +160,6 @@ export function Shell() {
       try {
         localStorage.setItem("fs-nav-collapsed", next ? "1" : "0");
       } catch {
-        /* storage unavailable */
       }
       return next;
     });
@@ -201,6 +204,9 @@ export function Shell() {
           <span className="side-version">1.0</span>
         </div>
       </aside>
+      {overlay ? (
+        <button type="button" className="nav-scrim" aria-label="Close menu" tabIndex={-1} onClick={() => setOverlay(false)} />
+      ) : null}
       <div className="shell-main">
         <header className="topbar">
           <button type="button" className="nav-burger" onClick={toggleNav} aria-label={narrow ? (overlay ? "Close menu" : "Open menu") : (collapsed ? "Expand sidebar" : "Collapse sidebar")} aria-expanded={narrow ? overlay : !collapsed} aria-keyshortcuts="[">
@@ -290,6 +296,7 @@ export function Shell() {
           })}
         </div>
         <div className="content">
+          <DemoBanner />
           {disconnected ? <p className="stream-down">Stream disconnected. Live data is stale and the client is retrying.</p> : null}
           {notice ? <p className="notice">{notice}</p> : null}
           {auth === "unknown" ? <p>Checking session.</p> : (

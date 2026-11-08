@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { gsap } from "gsap";
-import type { FeedAlert } from "../alerts";
+import { loadAlertQuality, type AlertQualityBody } from "../api";
 import { NetworkStage } from "../components/NetworkMap";
 import { RoleDashboard } from "../components/RoleDashboard";
 import { canLaunchAttack } from "../permissions";
@@ -38,6 +38,7 @@ export function Overview() {
   const disconnected = useApp((state) => state.disconnected);
   const links = useApp((state) => state.links);
   const incidentCount = useApp((state) => state.incidents.filter((row) => row.status === "OPEN").length);
+  const quality = useQuality();
 
   const host = assets.find((asset) => asset.id === selectedHost) ?? null;
   const shown = alerts.slice().reverse().slice(0, 12);
@@ -75,7 +76,11 @@ export function Overview() {
   const nodeCount = useCount(assets.length);
   const openCount = useCount(incidentCount);
   const hitCount = useCount(compromisedCount);
-  const grouped = groupAlerts(shown);
+  const grouped = shown.map((row) => ({
+    ...row,
+    count: row.occurrences ?? 1,
+    simulation: row.simulated ?? row.id.startsWith("sim-"),
+  }));
   const neighbours = host
     ? links
         .filter((link) => link.source === host.id || link.target === host.id)
@@ -117,6 +122,14 @@ export function Overview() {
           </article>
         </div>
       </header>
+      <section className="quality-strip" aria-label="Alert quality">
+        <span><b>{quality?.raw ?? 0}</b> detected</span>
+        <span><b>{quality?.delivered ?? 0}</b> reached the feed</span>
+        <span><b>{quality ? Math.round(quality.ratio * 100) : 0}%</b> delivery ratio</span>
+        <span><b>{quality?.folded ?? 0}</b> folded repeats</span>
+        <span><b>{quality?.suppressed ?? 0}</b> suppressed</span>
+        <Link to="/portal/alerts">Triage alerts</Link>
+      </section>
       <div className="ops-board" id="live-map">
         <section className="panel toolbar-card">
         <div className="ops-toolbar">
@@ -220,21 +233,23 @@ export function Overview() {
   );
 }
 
-function groupAlerts(alerts: FeedAlert[]): Array<FeedAlert & { count: number; simulation: boolean }> {
-  const rows: Array<FeedAlert & { count: number; simulation: boolean }> = [];
-  for (const alert of alerts) {
-    const time = new Date(alert.timestamp).getTime();
-    const last = rows[rows.length - 1];
-    const lastTime = last ? new Date(last.timestamp).getTime() : 0;
-    const simulation = alert.simulated ?? alert.id.startsWith("sim-");
-    if (last && last.attackType === alert.attackType && last.sourceIp === alert.sourceIp && last.targetIp === alert.targetIp && Math.abs(time - lastTime) < 20000) {
-      last.count += 1;
-      last.simulation = last.simulation || simulation;
-    } else {
-      rows.push({ ...alert, count: 1, simulation });
-    }
-  }
-  return rows;
+function useQuality(): AlertQualityBody | null {
+  const [quality, setQuality] = useState<AlertQualityBody | null>(null);
+  useEffect(() => {
+    let stop = false;
+    const read = () => {
+      loadAlertQuality()
+        .then((body) => { if (!stop) setQuality(body); })
+        .catch(() => undefined);
+    };
+    read();
+    const timer = window.setInterval(read, 5000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+  return quality;
 }
 
 function useCount(target: number): number {
@@ -340,4 +355,3 @@ function SelectedNode({
     </>
   );
 }
-

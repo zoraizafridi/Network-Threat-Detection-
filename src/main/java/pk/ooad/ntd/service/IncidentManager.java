@@ -11,10 +11,12 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 public class IncidentManager implements AlertListener {
     private final int correlationWindowSeconds;
     private final List<Incident> incidents = new ArrayList<>();
+    private Consumer<Incident> recorder = incident -> { };
 
     public IncidentManager() {
         correlationWindowSeconds = ConfigManager.getInstance()
@@ -33,10 +35,34 @@ public class IncidentManager implements AlertListener {
                 .filter(incident -> withinWindow(incident, alert))
                 .findFirst().orElse(null);
         if (correlated == null) {
-            incidents.add(new Incident(UUID.randomUUID().toString(), alert));
+            Incident created = new Incident(UUID.randomUUID().toString(), alert);
+            incidents.add(created);
+            recorder.accept(created);
         } else {
             correlated.addAlert(alert);
+            recorder.accept(correlated);
         }
+    }
+
+    public void setRecorder(Consumer<Incident> sink) {
+        this.recorder = sink == null ? incident -> { } : sink;
+    }
+
+    public synchronized void restore(List<Incident> restored) {
+        if (restored == null || restored.isEmpty()) {
+            return;
+        }
+        for (Incident incident : restored) {
+            if (incidents.stream().noneMatch(existing -> existing.getId().equals(incident.getId()))) {
+                incidents.add(incident);
+            }
+        }
+        incidents.sort((left, right) -> {
+            if (left.getOpenedAt() == null || right.getOpenedAt() == null) {
+                return 0;
+            }
+            return left.getOpenedAt().compareTo(right.getOpenedAt());
+        });
     }
 
     public synchronized List<Incident> getIncidents() {

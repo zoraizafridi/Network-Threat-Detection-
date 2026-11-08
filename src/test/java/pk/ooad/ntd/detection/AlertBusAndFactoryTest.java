@@ -66,4 +66,3 @@ class AlertBusAndFactoryTest {
         assertThrows(NullPointerException.class, () -> factory.create(null));
     }
 }
-

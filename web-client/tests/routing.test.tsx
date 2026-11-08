@@ -42,10 +42,7 @@ function mount(path: string) {
     }) as MediaQueryList;
   return render(
     <MemoryRouter initialEntries={[path]}>
-      {/* AppRoutes renders lazy page components; App always mounts it inside a
-          Suspense boundary (see RouteStage). Mounting it bare here made the
-          first navigation to a lazy route suspend with no fallback, which is
-          why the redirect assertion could never settle. */}
+
       <Suspense fallback={<p>loading</p>}>
         <AppRoutes />
       </Suspense>
@@ -59,9 +56,6 @@ describe("portal routing", () => {
 
   test("the legacy overview address redirects to the portal index", async () => {
     mount("/portal/overview");
-    // The redirect lives in a lazily loaded route tree, so the lazy import plus the
-    // Navigate effect has to settle. Give that a real budget: with the whole suite
-    // running in parallel the import can take well over the 1s default.
     await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/portal"), { timeout: 5000 });
   });
 

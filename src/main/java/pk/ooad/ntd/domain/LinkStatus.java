@@ -4,4 +4,3 @@ public enum LinkStatus {
     NORMAL,
     COMPROMISED
 }
-

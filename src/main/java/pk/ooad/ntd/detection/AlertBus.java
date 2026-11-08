@@ -8,6 +8,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 public class AlertBus {
     private final List<AlertListener> listeners = new CopyOnWriteArrayList<>();
+    private final List<AlertUpdateListener> updateListeners = new CopyOnWriteArrayList<>();
 
     public void subscribe(AlertListener l) {
         if (l != null && !listeners.contains(l)) {
@@ -21,6 +22,18 @@ public class AlertBus {
         }
     }
 
+    public void subscribeUpdate(AlertUpdateListener l) {
+        if (l != null && !updateListeners.contains(l)) {
+            updateListeners.add(l);
+        }
+    }
+
+    public void unsubscribeUpdate(AlertUpdateListener l) {
+        if (l != null) {
+            updateListeners.remove(l);
+        }
+    }
+
     public void publish(Alert a) {
         if (a == null) {
             return;
@@ -29,7 +42,18 @@ public class AlertBus {
             try {
                 listener.onAlert(a);
             } catch (Exception e) {
-                // A failing AlertListener must not break the others
+            }
+        }
+    }
+
+    public void publishUpdate(Alert a) {
+        if (a == null) {
+            return;
+        }
+        for (AlertUpdateListener listener : updateListeners) {
+            try {
+                listener.onAlertUpdate(a);
+            } catch (Exception e) {
             }
         }
     }
@@ -37,5 +61,8 @@ public class AlertBus {
     public List<AlertListener> getListeners() {
         return Collections.unmodifiableList(listeners);
     }
-}
 
+    public List<AlertUpdateListener> getUpdateListeners() {
+        return Collections.unmodifiableList(updateListeners);
+    }
+}

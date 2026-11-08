@@ -37,9 +37,6 @@
       <artifactId>slf4j-simple</artifactId>
       <version>2.0.13</version>
     </dependency>
-    <!-- Durable store for closed flows and raised alerts. The driver bundles
-         native libraries for Windows, Linux and macOS, so the shaded jar stays
-         a single runnable file. -->
     <dependency>
       <groupId>org.xerial</groupId>
       <artifactId>sqlite-jdbc</artifactId>

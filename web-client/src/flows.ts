@@ -3,7 +3,6 @@ import type { FlowRow } from "./types";
 export type FlowSortKey = "start" | "bytes" | "packets" | "duration";
 
 export interface FlowFilter {
-  /** Free text matched against both addresses, both ports and the label. */
   query: string;
   label: string;
   protocol: string;
@@ -37,7 +36,6 @@ function compare(sortKey: FlowSortKey) {
         delta = new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
     }
     if (delta !== 0 && !Number.isNaN(delta)) return delta;
-    // Keep the order stable for equal keys so polling does not shuffle rows.
     return a.id.localeCompare(b.id);
   };
 }

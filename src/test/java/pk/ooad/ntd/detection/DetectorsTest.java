@@ -63,13 +63,11 @@ class DetectorsTest {
             assertTrue(detector.analyze(successLogin).isEmpty());
         }
 
-        // Failed logins up to threshold (3) -> no alert
         for (int i = 1; i <= 3; i++) {
             NetworkEvent fail = new NetworkEvent(200 + i, baseTime.plusSeconds(i), "10.0.0.50", "10.0.0.2", 22, 100L, EventType.LOGIN_ATTEMPT, false, "FAIL");
             assertTrue(detector.analyze(fail).isEmpty());
         }
 
-        // 4th failure (> 3) -> alert
         NetworkEvent fourthFail = new NetworkEvent(204L, baseTime.plusSeconds(4), "10.0.0.50", "10.0.0.2", 22, 100L, EventType.LOGIN_ATTEMPT, false, "FAIL");
         Optional<Alert> alert = detector.analyze(fourthFail);
         assertTrue(alert.isPresent(), "Failed logins exceeding maxFailures must trigger alert");
@@ -85,14 +83,12 @@ class DetectorsTest {
     void testPortScanDetector() {
         PortScanDetector detector = new PortScanDetector("PortScanDetector", 60, 3, 3);
 
-        // Normal traffic (repeated access to ports 80 and 443) -> no alert
         for (int i = 0; i < 10; i++) {
             int port = (i % 2 == 0) ? 80 : 443;
             NetworkEvent normal = new NetworkEvent(i, baseTime.plusSeconds(i), "10.0.0.1", "10.0.0.2", port, 200L, EventType.REQUEST, true, "GET");
             assertTrue(detector.analyze(normal).isEmpty());
         }
 
-        // Probing 4 distinct ports (> 3) -> raises alert
         detector.analyze(new NetworkEvent(101L, baseTime.plusSeconds(1), "10.0.0.99", "10.0.0.2", 21, 40L, EventType.CONNECT, false, "SYN"));
         detector.analyze(new NetworkEvent(102L, baseTime.plusSeconds(2), "10.0.0.99", "10.0.0.2", 22, 40L, EventType.CONNECT, false, "SYN"));
         detector.analyze(new NetworkEvent(103L, baseTime.plusSeconds(3), "10.0.0.99", "10.0.0.2", 23, 40L, EventType.CONNECT, false, "SYN"));
@@ -111,7 +107,6 @@ class DetectorsTest {
     void testAnomalyDetectorWarmupAndAnomaly() {
         AnomalyDetector detector = new AnomalyDetector("AnomalyDetector", 3.0, 5);
 
-        // 1. Warmup phase: first 5 events (mean ~ 500, std ~ 50) must not alert
         long[] baselineBytes = {500L, 520L, 480L, 510L, 490L};
         for (int i = 0; i < 5; i++) {
             NetworkEvent warmupEvent = new NetworkEvent(i, baseTime.plusSeconds(i), "10.0.0.10", "10.0.0.2", 80, baselineBytes[i], EventType.DATA_TRANSFER, true, "OK");
@@ -119,7 +114,6 @@ class DetectorsTest {
             assertTrue(opt.isEmpty(), "AnomalyDetector must not alert during warmup count (" + i + ")");
         }
 
-        // Post-warmup normal event -> no alert
         NetworkEvent normalPostWarmup = new NetworkEvent(6L, baseTime.plusSeconds(6), "10.0.0.10", "10.0.0.2", 80, 505L, EventType.DATA_TRANSFER, true, "OK");
         assertTrue(detector.analyze(normalPostWarmup).isEmpty());
 
@@ -127,17 +121,14 @@ class DetectorsTest {
         long countBefore = statsBeforeAttack.getCount();
         double meanBefore = statsBeforeAttack.getMean();
 
-        // 2. Anomaly: 1,000,000 bytes (z-score >> 3.0) -> must alert
         NetworkEvent exfiltration = new NetworkEvent(7L, baseTime.plusSeconds(7), "10.0.0.10", "10.0.0.2", 443, 1_000_000L, EventType.DATA_TRANSFER, true, "DUMP");
         Optional<Alert> alert = detector.analyze(exfiltration);
         assertTrue(alert.isPresent(), "Extreme byte volume must trigger anomaly alert");
         assertEquals(AttackType.DATA_TRANSFER, alert.get().getAttackType());
 
-        // 3. No baseline update on flagged values: stats count and mean must remain unchanged!
         assertEquals(countBefore, statsBeforeAttack.getCount(), "Baseline count must not increase on flagged anomaly");
         assertEquals(meanBefore, statsBeforeAttack.getMean(), "Baseline mean must not be updated on flagged anomaly");
 
-        // 4. reset() clears stats
         detector.reset();
         assertEquals(0, detector.getStats().size(), "reset() must clear all host statistics");
     }
@@ -198,9 +189,8 @@ class DetectorsTest {
             DetectionEngine engine = new DetectionEngine(new LinkedBlockingQueue<>(), new AlertBus());
             assertEquals(17, engine.getCooldownSeconds());
         } finally {
-            ConfigManager.getInstance().load("src/main/resources/config.properties");
+            ConfigManager.getInstance().reload();
             Files.deleteIfExists(configFile);
         }
         }
 }
-

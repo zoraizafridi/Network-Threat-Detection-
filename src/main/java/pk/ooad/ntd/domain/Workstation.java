@@ -32,4 +32,3 @@ public class Workstation extends NetworkAsset {
         this.owner = owner != null ? owner : "";
     }
 }
-

@@ -6,4 +6,3 @@ public enum AttackType {
     DOS_FLOOD,
     DATA_TRANSFER
 }
-

@@ -5,14 +5,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import pk.ooad.ntd.domain.Alert;
 import pk.ooad.ntd.domain.AlertFactory;
+import pk.ooad.ntd.domain.AlertStatus;
 import pk.ooad.ntd.domain.AttackType;
 import pk.ooad.ntd.domain.EventType;
 import pk.ooad.ntd.domain.NetworkEvent;
 import pk.ooad.ntd.domain.Severity;
 import pk.ooad.ntd.flows.FlowRecorder;
 import pk.ooad.ntd.flows.FlowRecord;
+import pk.ooad.ntd.util.EventLog;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -158,6 +165,80 @@ class PersistenceTest {
         } finally {
             queue.close();
         }
+    }
+
+    @Test
+    @DisplayName("A version 1 file is migrated in place to version 2 and keeps its rows")
+    void schemaVersionOneMigratesInPlace() throws Exception {
+        Path file = temp.resolve("legacy/ntd.db");
+        Files.createDirectories(file.getParent());
+        Instant start = Instant.parse("2026-11-01T10:00:00Z");
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + file.toAbsolutePath());
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE flows (id TEXT PRIMARY KEY, src_ip TEXT NOT NULL, dst_ip TEXT NOT NULL,
+                        src_port INTEGER NOT NULL, dst_port INTEGER NOT NULL, protocol TEXT NOT NULL,
+                        bytes_out INTEGER NOT NULL, bytes_in INTEGER NOT NULL, packets INTEGER NOT NULL,
+                        start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, flags TEXT NOT NULL,
+                        label TEXT NOT NULL, simulated INTEGER NOT NULL, ended INTEGER NOT NULL)
+                    """);
+            statement.execute("""
+                    CREATE TABLE alerts (id TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL, severity TEXT NOT NULL,
+                        attack_type TEXT NOT NULL, source_ip TEXT NOT NULL, target_ip TEXT NOT NULL,
+                        detector TEXT NOT NULL, description TEXT NOT NULL, simulated INTEGER NOT NULL)
+                    """);
+            statement.execute("INSERT INTO flows VALUES ('legacy', '10.0.0.5', '10.0.0.9', 40000, 443,"
+                    + " 'TCP', 99, 0, 2, " + start.toEpochMilli() + ", "
+                    + start.plusSeconds(1).toEpochMilli() + ", 'OK', 'REQUEST', 0, 1)");
+            statement.execute("PRAGMA user_version = 1");
+        }
+
+        try (PersistenceService service = new PersistenceService(
+                enabledSettings().withDatabasePath(file))) {
+            assertTrue(service.isEnabled(), "a version 1 file is upgraded, not refused");
+            assertEquals(2, service.schemaVersion());
+
+            List<FlowRecord> flows = service.storedFlows(5);
+            assertEquals(1, flows.size(), "the rows written by the older build survive");
+            assertEquals("legacy", flows.get(0).id());
+            assertEquals(99, flows.get(0).bytesOut());
+            assertTrue(service.storedIncidents(5).isEmpty(),
+                    "the six version 2 tables exist after the upgrade");
+
+            Alert alert = new AlertFactory().create(Severity.HIGH, AttackType.PORT_SCAN,
+                    "10.0.0.5", "10.0.0.9", "SignatureDetector", "scan", start);
+            alert.fold(start.plusSeconds(2));
+            alert.moveTo(AlertStatus.ACKNOWLEDGED);
+            service.onAlert(alert);
+            assertTrue(service.flush(5_000));
+
+            AlertRecord stored = service.storedAlerts(5).get(0);
+            assertEquals(2, stored.occurrences(), "the fold columns are added by the upgrade");
+            assertEquals("ACKNOWLEDGED", stored.status());
+        }
+    }
+
+    @Test
+    @DisplayName("A corrupt file leaves the store off after one logged error and no crash")
+    void corruptDatabaseDegradesToMemory() throws IOException {
+        Path file = temp.resolve("broken/ntd.db");
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, "this is not a sqlite database");
+        EventLog.getInstance().clear();
+
+        try (PersistenceService service = new PersistenceService(
+                enabledSettings().withDatabasePath(file))) {
+            assertFalse(service.isEnabled(), "a file that will not open must not pretend to be a store");
+            assertEquals(0, service.schemaVersion());
+            assertThrows(PersistenceException.class, () -> service.storedFlows(5));
+            service.recordFlow(flow("held", Instant.now(), 10));
+            assertTrue(service.flush(50), "a closed store still answers the queue");
+        }
+
+        long reported = EventLog.getInstance().getEntries().stream()
+                .filter(line -> line.contains("Durable store unavailable"))
+                .count();
+        assertEquals(1, reported, "the failure is reported once, not on every write");
     }
 
     @Test

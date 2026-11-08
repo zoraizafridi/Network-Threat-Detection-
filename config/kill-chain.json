@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "chains": [
+    {
+      "id": "recon-to-exfil",
+      "name": "Recon to exfiltration",
+      "stages": ["PORT_SCAN", "BRUTE_FORCE", "DATA_TRANSFER"],
+      "windowSeconds": 900,
+      "severity": "CRITICAL",
+      "note": "Scan, then credentials, then a transfer out. Stages must arrive in this order from one source."
+    }
+  ]
+}

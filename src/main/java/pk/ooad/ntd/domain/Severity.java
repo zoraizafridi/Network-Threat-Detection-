@@ -5,4 +5,3 @@ public enum Severity {
     HIGH,
     CRITICAL
 }
-

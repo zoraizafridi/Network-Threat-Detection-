@@ -26,4 +26,3 @@ public class Viewer extends User {
         return false;
     }
 }
-

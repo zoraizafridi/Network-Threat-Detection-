@@ -1,4 +1,4 @@
-﻿@font-face {
+@font-face {
   font-family: "IBM Plex Sans";
   src: url("./fonts/IBMPlexSans-Regular.ttf") format("truetype");
   font-weight: 400;
@@ -31,7 +31,6 @@
 }
 
 :root {
-  /* Surfaces: the greens stay fixed. */
   --bg: #050A07;
   --surface-1: #0D1A12;
   --surface-2: #12241A;
@@ -39,23 +38,19 @@
   --border: #1B2B22;
   --border-strong: #2A4436;
 
-  /* Text: every text colour in the app comes from these four tokens. */
   --text-heading: #E8DCC4;
   --text-body: #C9C2AC;
   --text-label: #A7B8AC;
   --text-muted: #7E9488;
 
-  /* Accents: gold is the interactive colour, lime only marks live data and the brand. */
   --accent-gold: #D9A05B;
   --accent-lime: #B7F36B;
 
-  /* Filled buttons: gold plate with warm ink, never pure black. */
   --action-gold: #D9A93A;
   --action-gold-hover: #E4B44E;
   --action-gold-soft: rgba(217, 169, 58, 0.14);
   --action-ink: #17120A;
 
-  /* Status colours never use gold. */
   --critical: #FF6B6B;
   --warn: #F2C94C;
   --ok: #5FCB8B;
@@ -70,7 +65,6 @@
   --font-ui: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
-  /* Page styles use these aliases; each one points at a canonical token above. */
   --surface: var(--surface-1);
   --line: var(--border);
   --text: var(--text-heading);
@@ -196,6 +190,7 @@ th { font-family: "IBM Plex Sans", sans-serif; font-weight: 600; font-size: 13px
 .status-suspicious { color: var(--suspicious); }
 .status-compromised { color: var(--compromised); }
 .status-low { color: var(--low); }
+.contained-chip { margin-left: 8px; }
 
 .shell {
   display: grid;
@@ -599,6 +594,28 @@ th { font-family: "IBM Plex Sans", sans-serif; font-weight: 600; font-size: 13px
 }
 .map-label.is-selected { border-color: var(--info); color: var(--info); }
 .notice { font-size: 14px; }
+.demo-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px dashed var(--line);
+  border-left: 3px solid var(--accent-lime);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 13px;
+}
+.demo-strip strong {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-label);
+}
+.demo-accounts { color: var(--text-label); }
+.access-form .demo-strip { margin-bottom: 20px; font-size: 12px; }
 
 .split { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; min-height: 560px; }
 .map-frame, .map-slot, .map-stage {
@@ -884,7 +901,6 @@ th { font-family: "IBM Plex Sans", sans-serif; font-weight: 600; font-size: 13px
   color: var(--text);
 }
 .vesper-hero .word { display: inline-block; margin-right: 0.28em; }
-/* Gold is emphasis only: one word in the landing headline. */
 .vesper-hero h1 .is-gold { color: var(--accent-gold); }
 .vesper-hero .subline {
   max-width: 42rem;
@@ -1624,7 +1640,7 @@ pre.report {
     border-bottom: 0;
   }
   .shell.nav-open .sidebar { transform: none; }
-  .topbar { flex-wrap: wrap; height: auto; padding: 12px 16px; }
+  .shell .topbar { flex-wrap: wrap; height: auto; min-height: 56px; padding: 10px 16px; row-gap: 8px; }
   .top-search { order: 5; flex: 1 1 100%; }
   .overview { flex-direction: column; height: auto; min-height: calc(100vh - 64px); }
   .overview-map { min-height: 480px; }
@@ -1820,9 +1836,6 @@ pre.report {
 .topo-toggle button.on { background: var(--action-gold); color: var(--action-ink); border-color: var(--action-gold); }
 .topo-toggle button:disabled { opacity: 0.45; cursor: not-allowed; }
 .flat-map {
-  /* Absolute so the SVG can never be sized by its intrinsic aspect ratio: with
-     height: 100% Chrome still resolved min-height from the viewBox and the drawing
-     spilled 67 pixels below the stage, where the panel border cut it off. */
   position: absolute;
   inset: 0;
   display: block;
@@ -1887,8 +1900,6 @@ pre.report {
 }
 .shell .dash-empty, .shell .dash-delta, .shell .dash-timeline span { color: var(--text-label); }
 .shell .top-status { color: var(--ink); font-size: 13px; }
-/* The selected view is a filled control, so it takes the gold plate and warm ink
-   like every other on state in the portal. */
 .shell .topo-toggle button.on { color: var(--action-ink); background: var(--action-gold); border-color: var(--action-gold); }
 .shell, .shell-main { overflow-x: hidden; }
 html { scrollbar-color: var(--border) var(--bg); }
@@ -2011,7 +2022,7 @@ html { scrollbar-color: var(--border) var(--bg); }
 .dash-kpi { grid-column: span 4; }
 .dash-chart, .dash-heat { grid-column: span 6; }
 .dash-health { grid-column: span 12; }
-.status-strip, .ops-toolbar { grid-column: 1 / -1; }
+.status-strip, .ops-toolbar, .quality-strip { grid-column: 1 / -1; }
 .ops-map { grid-column: span 8; min-height: 480px; height: 520px; background: var(--bg); }
 .ops-side { grid-column: span 4; }
 .health-list li { border-top-color: var(--border); }
@@ -2092,10 +2103,6 @@ html { scrollbar-color: var(--border) var(--bg); }
 .dash-filters button.on, .dash-filters button:hover { background: var(--surface-3); color: var(--text); border-color: var(--border); }
 .shell .dash-figure { font-family: var(--font-mono); font-size: 22px; font-weight: 400; }
 .shell pre.report, .shell .content pre.report { background: var(--surface-1); color: var(--text); border: 0; font-family: var(--font-mono); font-size: 13px; }
-/* The map height comes from the stage, which is a fixed 520 pixels. The 65 viewport
-   unit minimum that used to sit on this rule won on specificity over the stage's own
-   sizing: at a 903 pixel tall window the flat SVG was forced to 587 pixels inside a
-   520 pixel stage, so the drawing ran past the card border. */
 .shell .map-slot, .shell .map-frame, .shell .map-stage, .shell .flat-map { background: var(--bg); }
 .shell .split { grid-template-columns: minmax(0, 65%) minmax(0, 35%); }
 .shell .split > * { min-width: 0; overflow-wrap: anywhere; }
@@ -2141,7 +2148,6 @@ html { scrollbar-color: var(--border) var(--bg); }
 .stat-tile { display: grid; grid-template-columns: 28px 1fr; grid-template-rows: auto auto; column-gap: 12px; align-items: center; }
 .stat-tile .card-ico { grid-row: 1 / span 2; }
 .stat-value { font-family: var(--font-ui); font-size: 28px; font-weight: 600; line-height: 1.1; color: var(--text); }
-/* Key figures use gold only when a view marks one as highlighted. */
 .stat-value.is-accent, .dash-figure.is-accent, .risk-figure.is-accent { color: var(--accent-gold); }
 .stat-state, .stat-tile span, .greet { font-size: 12.5px; font-weight: 500; color: var(--text-label); }
 .stat-state { font-size: 20px; font-weight: 600; color: var(--text); line-height: 1.1; }
@@ -2167,6 +2173,15 @@ html { scrollbar-color: var(--border) var(--bg); }
 .alert-route svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .alert-row time { grid-area: time; margin-left: 0; font-size: 12px; color: var(--text-label); }
 .sim-pill { font-size: 11px; padding: 2px 6px; }
+.quality-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 20px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-1); font-size: 13px; color: var(--text-label); }
+.quality-strip b { margin-right: 4px; font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: var(--text); }
+.quality-strip a { margin-left: auto; color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border-strong); }
+.quality-strip a:hover { border-bottom-color: var(--info); }
+.move-select { margin-left: 8px; height: 26px; font-size: 12.5px; }
+.row.pager { justify-content: space-between; align-items: center; margin-top: 8px; }
+.timeline { margin: 0; padding-left: 18px; display: grid; gap: 10px; }
+.timeline li[data-kind="escalation"] { font-weight: 600; }
+.timeline .small, .timeline p { margin: 2px 0 0; font-size: 12.5px; }
 .node-name { font-size: 16px; font-weight: 600; }
 .node-ip { font-size: 13px; color: var(--text-label); }
 .risk-num { font-size: 22px; }
@@ -2183,7 +2198,7 @@ html { scrollbar-color: var(--border) var(--bg); }
 .risk-bar i.is-warn { background: var(--warn); }
 .shell .map-stage, .shell .ops-map, .shell .flat-map, .shell .map-canvas, .shell .map-slot, .shell .topo-stage { background: var(--bg); }
 
-.shell .topbar { height: 56px; padding: 0 16px; gap: 12px; background: var(--surface-1); box-shadow: none; }
+.shell .topbar { min-height: 56px; padding: 0 16px; gap: 12px; background: var(--surface-1); box-shadow: none; }
 .shell .sidebar { background: var(--surface-1); box-shadow: none; }
 .shell .content, .shell.is-collapsed .content { padding: 24px; }
 .shell .panel, .shell .dash-card, .shell .stat-tile, .shell .toolbar-card {
@@ -2197,14 +2212,14 @@ html { scrollbar-color: var(--border) var(--bg); }
 .shell button, .shell .secondary, .shell select, .shell input { border-radius: 4px; }
 .board-12 { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
 .span-8 { grid-column: span 8; min-width: 0; }
+.span-7 { grid-column: span 7; min-width: 0; }
+.span-6 { grid-column: span 6; min-width: 0; }
+.span-5 { grid-column: span 5; min-width: 0; }
 .span-4 { grid-column: span 4; min-width: 0; }
+.span-12 { grid-column: 1 / -1; min-width: 0; }
 .is-compact { align-self: start; }
 .map-canvas, .map-canvas .map-slot, .map-canvas .topo-stage { min-height: 520px; height: 100%; }
-/* Map canvas background matches the scene background so there is no flash */
 .map-canvas { background: var(--bg); }
-/* The map panel clips its own children. The stage, the canvas and the flat SVG used
-   to be sized with fixed pixel minimums, which let the drawing escape the card when
-   the page was zoomed or when the viewport was short. */
 .map-panel, .map-canvas, .map-canvas .topo-stage { overflow: hidden; }
 .ops-toolbar { display: flex; align-items: center; gap: 16px; justify-content: space-between; }
 .play-set, .speed-set, .sim-control { display: inline-flex; align-items: center; gap: 8px; }
@@ -2219,7 +2234,8 @@ html { scrollbar-color: var(--border) var(--bg); }
 .stage-steps li.is-done + li::before, .stage-steps li.is-now::before { background: var(--ok); }
 .idle-label { color: var(--text-label); font-size: 13px; }
 .event-table { width: 100%; min-width: 520px; border-collapse: collapse; }
-.event-table th, .event-table td { height: 40px; padding: 0 8px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; white-space: nowrap; }
+.event-table th, .event-table td { height: 40px; padding: 0 8px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--border); font-size: 14px; white-space: nowrap; }
+.event-table .count-chip { vertical-align: middle; white-space: nowrap; }
 .event-table th { color: var(--text-label); font-weight: 500; font-size: 12.5px; background: var(--surface-2); }
 .event-scroll { max-height: 360px; overflow: auto; }
 .sim-control { position: relative; height: 36px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-1); }
@@ -2276,7 +2292,7 @@ html { scrollbar-color: var(--border) var(--bg); }
 .stage-steps .idle-label { border: 0; background: transparent; }
 .stage-steps .idle-label::before { display: none; }
 .stat-tile .stream-dot { margin-left: 8px; }
-@media (max-width: 960px) { .span-8, .span-4 { grid-column: 1 / -1; } }
+@media (max-width: 960px) { .span-8, .span-7, .span-6, .span-5, .span-4, .span-12 { grid-column: 1 / -1; } }
 @media (max-width: 960px) { .stat-row { grid-template-columns: 1fr 1fr; } }
 
 .shell .panel, .shell .dash-card, .shell .stat-tile {
@@ -2291,7 +2307,7 @@ html { scrollbar-color: var(--border) var(--bg); }
   border: 0;
   border-bottom: 1px solid var(--border);
 }
-.shell table td { border-color: var(--border); }
+.shell table td { border-color: var(--border); vertical-align: middle; }
 .shell .topbar button, .shell .top-actions button, .sim-control, .sim-control .primary, .sim-control .chevron {
   height: 36px;
   line-height: 1;
@@ -2355,8 +2371,27 @@ html { scrollbar-color: var(--border) var(--bg); }
 .bell-pop { width: min(360px, calc(100vw - 32px)); max-height: 420px; overflow: auto; }
 .alert-pop-row { display: grid; gap: 2px; text-align: left; background: transparent; color: var(--text); border: 0; border-radius: 4px; padding: 8px; }
 .alert-pop-row:hover, .alert-pop-row:focus-visible { background: var(--surface-3); outline: 2px solid var(--accent-lime); }
-.toast-stack { position: fixed; top: 68px; right: 16px; z-index: 40; display: flex; flex-direction: column; gap: 8px; width: min(360px, calc(100vw - 32px)); }
-.toast-stack .alert-pop-row { background: var(--surface-2); box-shadow: none; border: 1px solid var(--border); }
+.toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  top: auto;
+  z-index: 40;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(60vh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: none;
+}
+.toast-stack .alert-pop-row {
+  pointer-events: auto;
+  background: var(--surface-2);
+  box-shadow: none;
+  border: 1px solid var(--border);
+}
 .plan-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
 .plan-grid .span-3 { grid-column: span 3; }
 .plan-grid .span-6 { grid-column: span 6; }
@@ -2367,7 +2402,6 @@ html { scrollbar-color: var(--border) var(--bg); }
 .host-pick { max-height: 360px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
 .host-pick label { display: flex; align-items: center; gap: 8px; min-height: 32px; }
 .exclude-ring { stroke-dasharray: 3 2; }
-/* Flows view: label tally and sortable headers. */
 .flow-labels { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
 .flow-labels li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .flow-table th button {
@@ -2381,9 +2415,82 @@ html { scrollbar-color: var(--border) var(--bg); }
 }
 .flow-table th button.is-active { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
 
-/* Wide tables scroll inside their panel on small screens instead of widening the page. */
+.import-drop {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: rgba(183, 243, 107, 0.02);
+  transition: border-color 160ms var(--ease-out), background 160ms var(--ease-out);
+}
+.import-drop.is-over { border-color: var(--accent-lime); background: var(--primary-soft); }
+.import-drop strong { color: var(--text); font-weight: 600; }
+.import-drop p { margin: 0; }
+.import-progress { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; margin: 4px 0 12px; }
+.import-progress i { display: block; height: 100%; background: var(--accent-lime); transition: width 240ms var(--ease-out); }
+.import-labels td:first-child { letter-spacing: 0.04em; }
+.import-problems { margin: 12px 0 0; padding-left: 18px; color: var(--warn); font-size: 13px; display: grid; gap: 4px; }
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  margin-bottom: 8px;
+}
+.incident-table {
+  width: 100%;
+  min-width: 520px;
+}
+.intel-table {
+  width: 100%;
+  min-width: 320px;
+}
+.intel-form {
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.intel-password-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 1024px) {
+  .board-12 { grid-template-columns: 1fr; }
+  .span-8, .span-7, .span-6, .span-5, .span-4, .span-12 { grid-column: 1 / -1; }
+}
+
+.shell .top-actions { min-width: 0; }
+.nav-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+}
+.shell .nav-scrim {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: rgba(4, 10, 7, 0.56);
+}
+.shell .nav-scrim:hover { background: rgba(4, 10, 7, 0.56); }
+@media (max-width: 640px) {
+  .shell .topbar { padding: 8px 12px; gap: 8px; }
+  .shell .topbar .top-status { display: none; }
+  .sim-control > span, .sim-control .auto-chip { display: none; }
+  .user-menu > span:not(.avatar) { display: none; }
+  .menu-pop { position: fixed; top: 64px; left: 12px; right: 12px; width: auto; min-width: 0; }
+  .bell-pop { width: auto; max-height: min(60vh, 420px); }
+  .shell .content, .shell.is-collapsed .content { padding: 16px; }
+  .toast-stack { left: 12px; right: 12px; bottom: 12px; width: auto; }
+}
+
 @media (max-width: 960px) {
-  .shell .panel:has(> table) { overflow-x: auto; }
+  .shell .panel:has(table) { overflow-x: auto; }
+  .shell .panel:has(table) table:has(thead) { min-width: 560px; }
   .shell .content { padding: 16px; }
 }
 
@@ -2393,4 +2500,3 @@ html { scrollbar-color: var(--border) var(--bg); }
   .panel, .stat-tile { break-inside: avoid; background: #fff; color: #14241c; box-shadow: none; }
   .report-section { break-before: page; }
 }
-

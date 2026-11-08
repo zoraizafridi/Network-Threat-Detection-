@@ -19,6 +19,7 @@ class UtilityServicesTest {
     @AfterEach
     void clearEventLog() {
         EventLog.getInstance().clear();
+        config.reload();
     }
 
     @Test

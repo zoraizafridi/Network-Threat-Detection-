@@ -8,17 +8,10 @@ import pk.ooad.ntd.persistence.PersistenceStatus;
 import pk.ooad.ntd.security.AuditLog;
 import pk.ooad.ntd.util.ConfigManager;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
-/**
- * Answers the questions an auditor asks about this deployment: how long records
- * survive, what is kept about privileged actions, and which capabilities are
- * actually switched on.
- *
- * <p>Every number here is read from the component that owns it. A summary that
- * restated configured values would report intent; this one reports state, which
- * is the only version worth signing.</p>
- */
 public final class ComplianceService {
 
     public record Summary(
@@ -47,6 +40,12 @@ public final class ComplianceService {
     private final ContainmentService containment;
     private final EvidenceExporter exporter;
     private final ConfigManager config;
+
+    public record Control(String id, String title, String status, String evidence, boolean indicative) {
+    }
+
+    public static final String MAPPING_NOTE = "Indicative mapping to ISO/IEC 27001:2022 Annex A: "
+            + "it describes what this deployment does and is not a certification or an audit opinion.";
 
     public ComplianceService(PersistenceService persistence, AuditLog audit,
                              NotificationService notifications, ContainmentService containment,
@@ -81,14 +80,59 @@ public final class ComplianceService {
                 exporter.directory().toString());
     }
 
-    /** The retention cutoff being enforced right now, as an ISO instant string. */
     public String retentionCutoff() {
         return java.time.Instant.now()
                 .minus(java.time.Duration.ofMinutes(persistence.settings().retentionMinutes()))
                 .toString();
     }
 
-    /** Whatever the operator set for the audit cap, reported where it is read. */
+    public List<Control> controls() {
+        PersistenceStatus store = persistence.status();
+        int retention = persistence.settings().retentionMinutes();
+        int sweep = persistence.settings().sweepMinutes();
+        List<Control> controls = new ArrayList<>();
+        controls.add(new Control("A.8.15", "Logging",
+                audit.isEnabled() ? (store.enabled() ? "PASS" : "PARTIAL") : "FAIL",
+                audit.isEnabled()
+                        ? "audit trail holds " + audit.size() + " of " + audit.getMaxRecords()
+                                + " entries" + (store.enabled() ? ", persisted" : ", memory only")
+                        : "audit.enabled is false; privileged actions are not recorded",
+                true));
+        controls.add(new Control("A.8.16", "Monitoring activities",
+                store.enabled() && store.alertRows() > 0 ? "PASS" : "PARTIAL",
+                store.enabled()
+                        ? store.alertRows() + " alerts retained; containment mode " + containment.status().mode()
+                        : "detectors run continuously, but alerts live in a bounded ring until "
+                                + "persistence.enabled is true",
+                true));
+        controls.add(new Control("A.5.25", "Assessment of security events",
+                "PASS",
+                "alerts are grouped into incidents and ordered kill chains are escalated with their timeline",
+                true));
+        controls.add(new Control("A.8.6", "Capacity management",
+                "PASS",
+                "flow ring, write-behind queues, outbox and alert buffer are bounded and count their drops ("
+                        + store.droppedRows() + " dropped rows)",
+                true));
+        controls.add(new Control("A.8.10", "Information deletion",
+                retention > 0 && sweep > 0 ? "PASS" : "FAIL",
+                "retention " + retention + " minutes, sweep every " + sweep
+                        + " minutes, last sweep removed " + persistence.lastSweptRows() + " rows",
+                true));
+        controls.add(new Control("A.8.11", "Data masking",
+                notifications.settings().redact() ? "PASS" : "PARTIAL",
+                notifications.settings().redact()
+                        ? "notification bodies are redacted and truncated before delivery"
+                        : "notifications.redact is false; captured text is delivered verbatim",
+                true));
+        controls.add(new Control("A.8.9", "Configuration management",
+                "PASS",
+                "every capability is a configuration key with a safe default, and the effective values are "
+                        + "reported by the component that owns them",
+                true));
+        return controls;
+    }
+
     public int configuredAuditCap() {
         return config.getInt("audit.maxRecords", 2000);
     }

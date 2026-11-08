@@ -60,7 +60,6 @@ class NetworkEventTest {
             assertTrue(Modifier.isFinal(modifiers), "Field " + field.getName() + " must be final");
         }
 
-        // Verify no setter methods exist
         Method[] methods = NetworkEvent.class.getDeclaredMethods();
         for (Method method : methods) {
             assertFalse(
@@ -127,7 +126,6 @@ class NetworkEventTest {
         assertNotEquals(event1, null);
         assertNotEquals(event1, "other-type");
 
-        // Individual field inequality checks
         assertNotEquals(event1, new NetworkEvent(2L, now, "10.0.0.1", "10.0.0.2", 80, 512L, EventType.REQUEST, true, "GET /"));
         assertNotEquals(event1, new NetworkEvent(1L, now.plusSeconds(1), "10.0.0.1", "10.0.0.2", 80, 512L, EventType.REQUEST, true, "GET /"));
         assertNotEquals(event1, new NetworkEvent(1L, now, "10.0.0.9", "10.0.0.2", 80, 512L, EventType.REQUEST, true, "GET /"));
@@ -206,4 +204,3 @@ class NetworkEventTest {
         assertTrue(s.contains("22"));
     }
 }
-

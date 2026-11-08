@@ -10,13 +10,22 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 
 public final class EventLog {
     private static final EventLog instance = new EventLog();
+    private static final int FILE_BACKLOG = 8192;
+
     private final List<String> entries = Collections.synchronizedList(new ArrayList<>());
     private final Path logFile = Path.of("target", "event-log.log");
+    private final BlockingQueue<String> pending = new ArrayBlockingQueue<>(FILE_BACKLOG);
+    private boolean directoryReady;
 
     private EventLog() {
+        Thread writer = new Thread(this::drain, "EventLog-writer");
+        writer.setDaemon(true);
+        writer.start();
     }
 
     public static EventLog getInstance() {
@@ -27,13 +36,7 @@ public final class EventLog {
         Objects.requireNonNull(level, "level must not be null");
         String entry = Instant.now() + " [" + level + "] [" + safe(component) + "] " + safe(msg);
         entries.add(entry);
-        try {
-            Files.createDirectories(logFile.getParent());
-            Files.writeString(logFile, entry + System.lineSeparator(), StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        } catch (IOException ignored) {
-            // In-memory entries remain available if the optional file cannot be written.
-        }
+        pending.offer(entry);
     }
 
     public List<String> getEntries() {
@@ -44,14 +47,41 @@ public final class EventLog {
 
     public synchronized void clear() {
         entries.clear();
+        pending.clear();
         try {
             Files.deleteIfExists(logFile);
         } catch (IOException ignored) {
-            // Clearing the in-memory log must still succeed.
+        }
+    }
+
+    private void drain() {
+        while (true) {
+            try {
+                append(pending.take());
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private synchronized void append(String entry) {
+        try {
+            if (!directoryReady) {
+                Files.createDirectories(logFile.getParent());
+                directoryReady = true;
+            }
+            Files.writeString(logFile, entry + System.lineSeparator(), StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException ignored) {
         }
     }
 
     private String safe(String value) {
-        return value != null ? value : "";
+        if (value == null) {
+            return "";
+        }
+        String flattened = value.replace('\r', ' ').replace('\n', ' ');
+        return flattened.length() > 500 ? flattened.substring(0, 500) + "..." : flattened;
     }
 }

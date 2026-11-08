@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { resetAttackState } from "../attackPhase";
-import { HttpStatusError, request } from "../api";
+import { HttpStatusError, request, runScenario } from "../api";
 import { launchReady } from "../launch";
 import { attackLabel } from "../format";
 import { EmptyState, MapPanel, Page, Panel, StatusBadge } from "../components/ui";
@@ -15,6 +15,12 @@ const TYPES = [
   { id: "DATA_TRANSFER", label: "Data transfer" },
 ];
 
+const PRESETS = [
+  { id: "beaconing", label: "Beaconing" },
+  { id: "lateral-movement", label: "Lateral movement" },
+  { id: "intel-contact", label: "Indicator contact" },
+];
+
 export function AttackLab() {
   const role = useApp((state) => state.user?.role ?? "");
   const assets = useApp((state) => state.assets);
@@ -23,6 +29,8 @@ export function AttackLab() {
   const setSelectedId = useApp((state) => state.setSelectedId);
   const setNotice = useApp((state) => state.setNotice);
   const [type, setType] = useState(TYPES[0].id);
+  const [preset, setPreset] = useState(PRESETS[0].id);
+  const [message, setMessage] = useState("");
   const [src, setSrc] = useState("");
   const [dst, setDst] = useState("");
 
@@ -49,6 +57,23 @@ export function AttackLab() {
     const sequence = ["PORT_SCAN", "BRUTE_FORCE", "DOS_FLOOD"];
     for (const kind of sequence) {
       await launch(kind, src, dst);
+    }
+  }
+
+  async function runPreset() {
+    setNotice("");
+    setMessage("");
+    const source = assets.find((asset) => asset.id === src)?.ip;
+    const target = assets.find((asset) => asset.id === dst)?.ip;
+    try {
+      const result = await runScenario(preset, source, target);
+      setMessage(
+        `${result.title}: ${result.events} events submitted from ${result.source} to ${result.target}.`,
+      );
+    } catch (error) {
+      if (error instanceof HttpStatusError && error.status === 403) setMessage(accessDenied(role));
+      else if (error instanceof HttpStatusError && error.status === 400) setMessage("That preset is not known.");
+      else setMessage("The preset could not be run.");
     }
   }
 
@@ -109,6 +134,26 @@ export function AttackLab() {
           Multi-stage attack
         </button>
       </div>
+      <div className="row">
+        <label>
+          Preset{" "}
+          <select value={preset} onChange={(event) => setPreset(event.target.value)}>
+            {PRESETS.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="secondary" disabled={!launchReady(src, dst)} onClick={runPreset}>
+          Run preset
+        </button>
+        <span className="small">
+          A preset is a named shape rather than one burst: beacons repeat, lateral movement crosses hosts, and
+          the indicator contact reaches a listed address, domain and digest.
+        </span>
+      </div>
+      {message ? <p className="notice">{message}</p> : null}
       <div className="board-12">
         <MapPanel className="span-8" title="Network topology" subtitle="Same scene as Overview">
           <NetworkMap assets={assets} selectedId={selectedId} onSelect={(id) => setSelectedId(id || null)} />

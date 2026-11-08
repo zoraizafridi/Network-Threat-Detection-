@@ -14,16 +14,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * Flags a source that pushes more than a configured number of bytes off the
- * protected network inside one window.
- *
- * <p>Direction matters: traffic to an address that is not on one of the internal
- * prefixes is the traffic that can leave the building, so only that direction
- * counts. The prefixes are configuration, not a discovery step, because guessing
- * "internal" from the topology would silently change what the detector considers
- * an exit.</p>
- */
 public class DataExfilDetector extends Detector {
 
     private static final class Window {
@@ -37,6 +27,7 @@ public class DataExfilDetector extends Detector {
     private final long maxBytes;
     private final int maxTracked;
     private final long cooldownMillis;
+    private final List<String> allowlist;
     private final List<String> internalPrefixes;
     private final Map<String, Window> windows = new HashMap<>();
 
@@ -51,26 +42,38 @@ public class DataExfilDetector extends Detector {
                 config.getInt("detection.exfil.maxBytes", 5_000_000),
                 config.getInt("detection.exfil.maxTracked", 2000),
                 config.getInt("detection.exfil.cooldownSeconds", 600),
+                config.getList("detection.exfil.allowlist"),
                 config.getList("detection.exfil.internalPrefixes"));
     }
 
     DataExfilDetector(String name, boolean enabled, int windowSeconds, long maxBytes,
                       int maxTracked, int cooldownSeconds, List<String> internalPrefixes) {
+        this(name, enabled, windowSeconds, maxBytes, maxTracked, cooldownSeconds, List.of(), internalPrefixes);
+    }
+
+    DataExfilDetector(String name, boolean enabled, int windowSeconds, long maxBytes,
+                      int maxTracked, int cooldownSeconds, List<String> allowlist,
+                      List<String> internalPrefixes) {
         super(name != null ? name : "DataExfilDetector");
         this.enabled = enabled;
         this.windowMillis = Math.max(1, windowSeconds) * 1000L;
         this.maxBytes = Math.max(1L, maxBytes);
         this.maxTracked = Math.max(16, maxTracked);
         this.cooldownMillis = Math.max(0, cooldownSeconds) * 1000L;
-        List<String> prefixes = new ArrayList<>();
-        if (internalPrefixes != null) {
-            for (String prefix : internalPrefixes) {
-                if (prefix != null && !prefix.isBlank()) {
-                    prefixes.add(prefix.trim());
+        this.allowlist = cleaned(allowlist);
+        this.internalPrefixes = cleaned(internalPrefixes);
+    }
+
+    private static List<String> cleaned(List<String> entries) {
+        List<String> kept = new ArrayList<>();
+        if (entries != null) {
+            for (String entry : entries) {
+                if (entry != null && !entry.isBlank()) {
+                    kept.add(entry.trim());
                 }
             }
         }
-        this.internalPrefixes = List.copyOf(prefixes);
+        return List.copyOf(kept);
     }
 
     @Override
@@ -79,6 +82,9 @@ public class DataExfilDetector extends Detector {
             return Optional.empty();
         }
         if (isInternal(e.destIp())) {
+            return Optional.empty();
+        }
+        if (listed(allowlist, e.destIp()) || listed(allowlist, e.sourceIp())) {
             return Optional.empty();
         }
         String key = e.sourceIp();

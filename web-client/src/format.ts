@@ -19,6 +19,8 @@ export function statusLabel(status: string): string {
   if (key === "OPEN") return "Open";
   if (key === "CLOSED") return "Closed";
   if (key === "MITIGATED") return "Mitigated";
+  if (key === "IPS") return "IPS";
+  if (key === "IDS") return "IDS";
   if (key === "HIGH") return "High";
   if (key === "LOW") return "Low";
   if (key === "CRITICAL") return "Critical";

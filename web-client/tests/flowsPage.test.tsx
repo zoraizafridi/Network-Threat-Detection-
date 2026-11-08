@@ -2,11 +2,6 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { FlowsPage } from "../src/pages/Flows";
 
-/**
- * The live feed, the durable store and the status the store can refuse with.
- * They live in `vi.hoisted` because the factory below is hoisted above the
- * imports and would otherwise read them before they are assigned.
- */
 const fixtures = vi.hoisted(() => {
   const live = [
     {
@@ -54,8 +49,6 @@ vi.mock("../src/api", async (importOriginal) => {
   return {
     ...actual,
     loadFlows: async () => fixtures.live,
-    // The real history call refuses with a status error, so the page can tell a
-    // store that is switched off from a store that is merely empty.
     loadFlowHistory: async () => {
       if (fixtures.storedStatus !== 0) {
         throw new actual.HttpStatusError(fixtures.storedStatus);
@@ -78,7 +71,6 @@ describe("flows page", () => {
     expect(await screen.findByText("10.0.0.5")).toBeTruthy();
     expect(screen.getByText("10.0.0.7")).toBeTruthy();
     expect(screen.getByText("2.0 KB")).toBeTruthy();
-    // The label tally panel repeats each label, so the badge text is not unique.
     expect(screen.getAllByText("Port scan").length).toBeGreaterThan(0);
     expect(screen.getByText("Closed")).toBeTruthy();
     expect(screen.getByText("Open / failed")).toBeTruthy();

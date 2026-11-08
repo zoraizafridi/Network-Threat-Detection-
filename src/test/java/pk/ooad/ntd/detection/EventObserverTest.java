@@ -32,7 +32,7 @@ class EventObserverTest {
         engine.addEventObserver(event -> {
             throw new IllegalStateException("observer fault");
         });
-        engine.addEventObserver(null); // must be ignored, not registered
+        engine.addEventObserver(null);
         engine.start();
 
         try {

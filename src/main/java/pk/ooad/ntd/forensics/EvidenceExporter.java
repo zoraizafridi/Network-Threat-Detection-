@@ -24,16 +24,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/**
- * Writes a self-describing evidence bundle: the records themselves plus a
- * manifest that names the counts and the SHA-256 of each file.
- *
- * <p>The manifest is what makes the bundle evidence rather than a dump. Anyone
- * receiving it can recompute a digest and tell whether a file changed after it
- * was written, without trusting this process. Timestamps and the {@code
- * simulated} flags are carried through unchanged, so a reviewer can see which
- * rows came from the traffic generator.</p>
- */
 public final class EvidenceExporter {
 
     public record Bundle(String directory, String createdAt, int files, long bytes,

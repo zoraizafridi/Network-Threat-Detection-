@@ -5,6 +5,7 @@ import pk.ooad.ntd.domain.EventType;
 import pk.ooad.ntd.domain.Network;
 import pk.ooad.ntd.domain.NetworkAsset;
 import pk.ooad.ntd.domain.NetworkEvent;
+import pk.ooad.ntd.util.ConfigManager;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -30,6 +31,7 @@ public class TrafficSimulator {
 
     private final Network network;
     private HostProfile hostProfile;
+    private volatile SimulationNoise noise;
     private final Map<AttackType, AttackGenerator> attackGenerators;
     private final List<AttackRecord> groundTruth;
 
@@ -45,6 +47,7 @@ public class TrafficSimulator {
         this.autoMode = false;
 
         this.hostProfile = new HostProfile();
+        this.noise = SimulationNoise.from(ConfigManager.getInstance());
         this.groundTruth = new CopyOnWriteArrayList<>();
         this.attackGenerators = new EnumMap<>(AttackType.class);
 
@@ -115,19 +118,21 @@ public class TrafficSimulator {
 
         Instant now = clock.instant();
         List<NetworkEvent> rawEvents = generator.generate(srcIp, dstIp, now, random);
+        boolean variant = noise.variant(random);
 
         synchronized (this) {
             for (NetworkEvent raw : rawEvents) {
+                NetworkEvent shaped = noise.shape(raw, type, variant, random);
                 NetworkEvent event = new NetworkEvent(
                     nextEventId++,
-                    raw.timestamp(),
-                    raw.sourceIp(),
-                    raw.destIp(),
-                    raw.port(),
-                    raw.bytes(),
-                    raw.type(),
-                    raw.success(),
-                    raw.payload(),
+                    shaped.timestamp(),
+                    shaped.sourceIp(),
+                    shaped.destIp(),
+                    shaped.port(),
+                    shaped.bytes(),
+                    shaped.type(),
+                    shaped.success(),
+                    shaped.payload(),
                     true
                 );
                 queue.offer(event);
@@ -174,7 +179,7 @@ public class TrafficSimulator {
         boolean success = random.nextDouble() < 0.95;
         String payload = "NORMAL_PAYLOAD";
 
-        return new NetworkEvent(id, timestamp, sourceIp, destIp, port, bytes, type, success, payload);
+        return noise.decorate(new NetworkEvent(id, timestamp, sourceIp, destIp, port, bytes, type, success, payload), random);
     }
 
     public BlockingQueue<NetworkEvent> getEventQueue() {
@@ -205,6 +210,14 @@ public class TrafficSimulator {
         this.hostProfile = hostProfile != null ? hostProfile : new HostProfile();
     }
 
+    public SimulationNoise getNoise() {
+        return noise;
+    }
+
+    public void setNoise(SimulationNoise noise) {
+        this.noise = noise != null ? noise : SimulationNoise.off();
+    }
+
     private synchronized void startWorkerIfNeeded() {
         if (running.get() && autoMode && (workerThread == null || !workerThread.isAlive())) {
             workerThread = new Thread(() -> {
@@ -230,4 +243,3 @@ public class TrafficSimulator {
         }
     }
 }
-

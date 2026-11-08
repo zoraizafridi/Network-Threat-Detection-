@@ -56,25 +56,21 @@ class NetworkAssetTest {
         Server server = new Server("srv-risk", "Risk Test", "10.0.0.99", 3);
         assertEquals(0.0, server.getRiskScore(), "Initial riskScore must be 0");
 
-        // Negative delta while at 0 should stay clamped at 0
         server.addRisk(-15.0);
         assertEquals(0.0, server.getRiskScore(), "Risk score must not go below 0");
 
         server.addRisk(40.0);
         assertEquals(40.0, server.getRiskScore());
 
-        // Addition that would exceed 100 must clamp at 100
         server.addRisk(75.0);
         assertEquals(100.0, server.getRiskScore(), "Risk score must be clamped at 100");
 
-        // Further addition must not push past 100
         server.addRisk(50.0);
         assertEquals(100.0, server.getRiskScore(), "Risk score must remain at 100");
 
         server.addRisk(-30.0);
         assertEquals(70.0, server.getRiskScore());
 
-        // Extreme reduction past 0 clamps at 0
         server.addRisk(-120.0);
         assertEquals(0.0, server.getRiskScore(), "Risk score must clamp at 0 on large negative delta");
 
@@ -117,4 +113,3 @@ class NetworkAssetTest {
         assertTrue(s1.toString().contains("srv-eq"));
     }
 }
-

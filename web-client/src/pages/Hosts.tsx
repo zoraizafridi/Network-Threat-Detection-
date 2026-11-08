@@ -6,6 +6,7 @@ import { useApp } from "../store";
 
 export function HostsPage() {
   const assets = useApp((state) => state.assets);
+  const containedIps = useApp((state) => state.containedIps);
   return (
     <Page title="Hosts" description="Assets in the latest network snapshot.">
       <table>
@@ -31,7 +32,15 @@ export function HostsPage() {
               </td>
               <td>{asset.criticality}</td>
               <td>{asset.riskScore}</td>
-              <td><StatusBadge status={asset.status} /></td>
+              <td>
+                <StatusBadge status={asset.status} />
+                {containedIps.includes(asset.ip) ? (
+                  <span className="badge isolated contained-chip">
+                    <i />
+                    Contained
+                  </span>
+                ) : null}
+              </td>
             </tr>
           ))}
         </tbody>

@@ -40,4 +40,3 @@ public class BruteForceGenerator extends AttackGenerator {
         return events;
     }
 }
-

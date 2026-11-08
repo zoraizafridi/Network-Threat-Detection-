@@ -119,7 +119,6 @@ public class SignatureDetector extends Detector {
 
     @Override
     public void reset() {
-        // Stateless rule matching; satisfies reset() contract
     }
 
     public Set<String> getBadIps() {
@@ -134,4 +133,3 @@ public class SignatureDetector extends Detector {
         return Collections.unmodifiableList(payloadPatterns);
     }
 }
-

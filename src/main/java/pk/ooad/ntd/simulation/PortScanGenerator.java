@@ -60,4 +60,3 @@ public class PortScanGenerator extends AttackGenerator {
         return events;
     }
 }
-

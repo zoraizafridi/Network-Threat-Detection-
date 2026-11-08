@@ -83,4 +83,3 @@ class LinkTest {
         assertNotNull(l1.toString());
     }
 }
-

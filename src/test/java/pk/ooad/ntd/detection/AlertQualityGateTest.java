@@ -22,11 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * The gate that can silence alerts, so every way it says no is pinned down:
- * the repeats it folds, the floor it applies, the bound on its bookkeeping, and
- * the fact that a suppressed alert costs nothing.
- */
 class AlertQualityGateTest {
 
     private static final Instant BASE = Instant.parse("2026-11-08T09:00:00Z");
@@ -195,7 +190,6 @@ class AlertQualityGateTest {
         return new NetworkEvent(id, at, "10.0.0.5", "10.0.0.9", 443, 500, EventType.REQUEST, true, "GET");
     }
 
-    /** A detector with nothing to decide: it raises one alert per event, every time. */
     private static final class AlwaysAlerts extends Detector {
 
         private AlwaysAlerts() {

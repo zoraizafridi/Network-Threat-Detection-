@@ -1,17 +1,15 @@
 package pk.ooad.ntd.persistence;
 
 import pk.ooad.ntd.domain.Alert;
+import pk.ooad.ntd.domain.AlertStatus;
+import pk.ooad.ntd.domain.AttackType;
+import pk.ooad.ntd.domain.CriticalAlert;
+import pk.ooad.ntd.domain.HighAlert;
+import pk.ooad.ntd.domain.LowAlert;
+import pk.ooad.ntd.domain.Severity;
 
 import java.time.Instant;
 
-/**
- * A stored alert as the durable table keeps it.
- *
- * <p>Severity and attack type stay strings on purpose. {@code Alert} is an
- * abstract class with three concrete subclasses, and re-creating a subclass from
- * a row would mean inventing state the original never had. A row is a record of
- * what was raised, not a live alert object.</p>
- */
 public record AlertRecord(
         String id,
         Instant timestamp,
@@ -21,9 +19,18 @@ public record AlertRecord(
         String targetIp,
         String detector,
         String description,
-        boolean simulated) {
+        boolean simulated,
+        int occurrences,
+        Instant firstSeen,
+        Instant lastSeen,
+        String status) {
 
-    /** Projects a live alert onto the columns the store and the exporter use. */
+    public AlertRecord(String id, Instant timestamp, String severity, String attackType, String sourceIp,
+                       String targetIp, String detector, String description, boolean simulated) {
+        this(id, timestamp, severity, attackType, sourceIp, targetIp, detector, description, simulated,
+                1, timestamp, timestamp, AlertStatus.NEW.name());
+    }
+
     public static AlertRecord from(Alert alert) {
         return new AlertRecord(
                 alert.getId(),
@@ -34,6 +41,31 @@ public record AlertRecord(
                 alert.getTargetIp(),
                 alert.getDetectorName(),
                 alert.getDescription(),
-                alert.isSimulated());
+                alert.isSimulated(),
+                alert.getOccurrences(),
+                alert.getFirstSeen(),
+                alert.getLastSeen(),
+                alert.getStatus().name());
+    }
+
+    public Alert toAlert() {
+        if (id == null || timestamp == null) {
+            return null;
+        }
+        Severity level;
+        AttackType type;
+        try {
+            level = Severity.valueOf(severity);
+            type = AttackType.valueOf(attackType);
+        } catch (IllegalArgumentException | NullPointerException ex) {
+            return null;
+        }
+        Alert alert = switch (level) {
+            case LOW -> new LowAlert(id, timestamp, type, sourceIp, targetIp, detector, description);
+            case HIGH -> new HighAlert(id, timestamp, type, sourceIp, targetIp, detector, description);
+            case CRITICAL -> new CriticalAlert(id, timestamp, type, sourceIp, targetIp, detector, description);
+        };
+        alert.restore(occurrences, firstSeen, lastSeen, AlertStatus.parse(status));
+        return alert.markSimulated(simulated);
     }
 }

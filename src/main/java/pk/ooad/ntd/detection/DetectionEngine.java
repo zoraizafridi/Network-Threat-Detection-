@@ -34,6 +34,8 @@ public class DetectionEngine {
     private volatile AlertGate alertGate = AlertGate.ALLOW_ALL;
     private volatile Predicate<NetworkEvent> admission = event -> true;
     private final AtomicLong droppedEvents = new AtomicLong();
+    private final AtomicLong processedEvents = new AtomicLong();
+    private final AtomicLong detectedAlerts = new AtomicLong();
     private final long queuePollMillis;
     private final long workerJoinMillis;
 
@@ -81,6 +83,8 @@ public class DetectionEngine {
         }
         lastAlertAt.clear();
         droppedEvents.set(0);
+        processedEvents.set(0);
+        detectedAlerts.set(0);
     }
 
     public void addDetector(Detector d) {
@@ -89,13 +93,6 @@ public class DetectionEngine {
         }
     }
 
-    /**
-     * Registers a tap on the raw event stream, for telemetry that needs the
-     * events themselves rather than the alerts they produce (flow accounting,
-     * packet capture, replay). Observers run before the detectors and cannot
-     * break detection: a failing observer is logged once and then skipped for
-     * that event.
-     */
     public void addEventObserver(Consumer<NetworkEvent> observer) {
         if (observer != null) {
             eventObservers.add(observer);
@@ -106,17 +103,10 @@ public class DetectionEngine {
         return Collections.unmodifiableList(eventObservers);
     }
 
-    /** Installs the final filter between detection and publication. */
     public void setAlertGate(AlertGate gate) {
         this.alertGate = gate == null ? AlertGate.ALLOW_ALL : gate;
     }
 
-    /**
-     * Installs a check that runs before an event is observed or detected. It is
-     * the seam containment uses to drop traffic from a blocked source, and it
-     * defaults to admitting everything so the pipeline is unchanged until
-     * something is installed.
-     */
     public void setAdmission(Predicate<NetworkEvent> admission) {
         this.admission = admission == null ? event -> true : admission;
     }
@@ -125,9 +115,16 @@ public class DetectionEngine {
         return admission;
     }
 
-    /** Events refused by the admission check since the last reset. */
     public long getDroppedEvents() {
         return droppedEvents.get();
+    }
+
+    public long getProcessedEvents() {
+        return processedEvents.get();
+    }
+
+    public long getDetectedAlerts() {
+        return detectedAlerts.get();
     }
 
     public AlertGate getAlertGate() {
@@ -139,7 +136,7 @@ public class DetectionEngine {
             try {
                 NetworkEvent event = queue.poll(queuePollMillis, TimeUnit.MILLISECONDS);
                 if (event != null) {
-                    process(event);
+                    processNow(event);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -148,16 +145,18 @@ public class DetectionEngine {
         }
     }
 
-    private void process(NetworkEvent e) {
+    public void processNow(NetworkEvent e) {
         if (!admission.test(e)) {
             droppedEvents.incrementAndGet();
             return;
         }
+        processedEvents.incrementAndGet();
         notifyObservers(e);
         for (Detector detector : detectors) {
             Optional<Alert> optAlert = detector.analyze(e);
             if (optAlert.isPresent()) {
                 Alert alert = optAlert.get();
+                detectedAlerts.incrementAndGet();
                 String source = alert.getSourceIp();
                 Instant now = alert.getTimestamp();
 
@@ -169,10 +168,13 @@ public class DetectionEngine {
                     }
                 }
 
-                // The gate looks at the alert; a suppressed alert does not
-                // consume the source cooldown, so the next genuine alert for the
-                // same source is not silenced by a duplicate.
-                if (!alertGate.allow(alert)) {
+                AlertGate.Decision decision = alertGate.decide(alert);
+                if (!decision.isDelivered()) {
+                    if (decision.isFolded() && decision.foldedInto() != null) {
+                        Alert earlier = decision.foldedInto();
+                        earlier.fold(now);
+                        alertBus.publishUpdate(earlier);
+                    }
                     continue;
                 }
 
@@ -223,4 +225,3 @@ public class DetectionEngine {
         return running.get();
     }
 }
-

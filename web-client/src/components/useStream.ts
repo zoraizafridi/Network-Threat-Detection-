@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import type { FeedAlert } from "../alerts";
 import { applyState, loadAlerts, loadIncidents, loadNetwork, type StateBody } from "../api";
 import { useApp } from "../store";
-import type { Asset, IncidentRow, NetLink } from "../types";
+import type { Asset, ContainedAddress, IncidentRow, NetLink } from "../types";
 
 export function usePortalData(active: boolean): void {
   useEffect(() => {
@@ -19,8 +19,14 @@ export function usePortalData(active: boolean): void {
         if (payload) useApp.getState().pushAlert(payload);
       });
       source.addEventListener("network", (event) => {
-        const payload = parse<{ assets: Asset[]; links: NetLink[] }>((event as MessageEvent).data);
-        if (payload?.assets && payload.links) useApp.getState().setNetwork(payload.assets, payload.links);
+        const payload = parse<{ assets: Asset[]; links: NetLink[]; contained?: ContainedAddress[] }>(
+          (event as MessageEvent).data,
+        );
+        if (payload?.assets && payload.links) {
+          useApp
+            .getState()
+            .setNetwork(payload.assets, payload.links, undefined, (payload.contained ?? []).map((entry) => entry.ip));
+        }
       });
       source.addEventListener("state", (event) => {
         const payload = parse<StateBody>((event as MessageEvent).data);

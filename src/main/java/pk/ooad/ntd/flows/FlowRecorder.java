@@ -11,8 +11,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,30 +23,8 @@ import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
-/**
- * Aggregates the detector's event stream into connection-oriented flow records.
- *
- * <p>The recorder attaches to {@link pk.ooad.ntd.detection.DetectionEngine} as
- * an event observer, so it sees exactly the events the detectors see. Events
- * that share a five-tuple are folded into one {@link FlowRecord} until the flow
- * has been idle for {@code flow.idleTimeoutSeconds}; the record is then closed
- * and kept for {@code flow.retentionMinutes}.</p>
- *
- * <p>The simulator does not carry source ports, so a source port is derived
- * deterministically from (source, destination, destination port). Two events for
- * the same destination therefore land in the same flow, which is what the
- * aggregation is for. This is a documented projection, never presented as a
- * captured value (see {@link FlowRecord}).</p>
- *
- * <p>Ports listed in {@code flow.udpPorts} are reported as UDP and everything
- * else as TCP, because the feed carries no protocol field either.</p>
- *
- * <p>All access is synchronized on the recorder: the detection worker writes,
- * the HTTP thread reads.</p>
- */
 public final class FlowRecorder implements Consumer<NetworkEvent> {
 
-    /** A payload pattern that names a flow. Earlier entries win over later ones. */
     public record LabelRule(String label, Pattern pattern) {
     }
 
@@ -59,12 +38,13 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
     private final Set<Integer> udpPorts;
     private final List<LabelRule> labelRules;
 
-    private final Map<String, Mutable> active = new HashMap<>();
+    private final Map<String, Mutable> active = new LinkedHashMap<>(256, 0.75f, true);
     private final Deque<FlowRecord> closed = new ArrayDeque<>();
     private final List<Consumer<FlowRecord>> closeListeners = new CopyOnWriteArrayList<>();
     private final AtomicBoolean closeFaultLogged = new AtomicBoolean();
     private long sequence;
     private Instant watermark;
+    private volatile boolean recording = true;
 
     public FlowRecorder() {
         this(ConfigManager.getInstance());
@@ -95,7 +75,7 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
 
     @Override
     public synchronized void accept(NetworkEvent event) {
-        if (!enabled || event == null || event.timestamp() == null) {
+        if (!enabled || !recording || event == null || event.timestamp() == null) {
             return;
         }
         Instant at = event.timestamp();
@@ -123,14 +103,9 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
         purgeExpired();
     }
 
-    /**
-     * Returns records newest-first. Flows that went idle are closed first so a
-     * quiet feed still surfaces them exactly once.
-     */
     public synchronized List<FlowRecord> query(FlowQuery filter) {
         FlowQuery query = filter == null ? FlowQuery.all(maxRecords) : filter;
         expireIdle();
-        // maxRecords bounds the closed ring, not the answer: open flows are extra.
         int limit = query.limit() <= 0 ? maxRecords : query.limit();
         limit = Math.min(limit, maxRecords + maxActiveFlows);
 
@@ -159,24 +134,12 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
         watermark = null;
     }
 
-    /**
-     * Registers a sink for closed records, which is how the durable store sees
-     * them. Listeners run on the detection worker and must not block; a listener
-     * that throws is logged once and skipped so detection is never affected.
-     */
     public void addCloseListener(Consumer<FlowRecord> listener) {
         if (listener != null) {
             closeListeners.add(listener);
         }
     }
 
-    /**
-     * Closes every flow still open, which is what a shutdown wants: the last
-     * few connections then reach the durable store instead of dying with the
-     * process.
-     *
-     * @return how many flows were closed
-     */
     public synchronized int closeAllOpen() {
         List<String> keys = new ArrayList<>(active.keySet());
         for (String key : keys) {
@@ -187,6 +150,16 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    public boolean setRecording(boolean on) {
+        boolean previous = recording;
+        recording = on;
+        return previous;
+    }
+
+    public boolean isRecording() {
+        return recording;
     }
 
     public synchronized int activeCount() {
@@ -244,17 +217,9 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
     }
 
     private void evictLeastRecent() {
-        String oldestKey = null;
-        Instant oldest = null;
-        for (Map.Entry<String, Mutable> entry : active.entrySet()) {
-            Instant seen = entry.getValue().lastSeen;
-            if (oldest == null || seen.isBefore(oldest)) {
-                oldest = seen;
-                oldestKey = entry.getKey();
-            }
-        }
-        if (oldestKey != null) {
-            close(oldestKey);
+        Iterator<String> keys = active.keySet().iterator();
+        if (keys.hasNext()) {
+            close(keys.next());
         }
     }
 
@@ -293,10 +258,6 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
         return Integer.MAX_VALUE;
     }
 
-    /**
-     * Stable per-tuple source port in the ephemeral range. {@code String.hashCode}
-     * is specified by the language, so the value is identical on every JVM.
-     */
     static int ephemeralPort(String srcIp, String dstIp, int dstPort) {
         int hash = 17;
         hash = 31 * hash + (srcIp == null ? 0 : srcIp.hashCode());
@@ -314,7 +275,6 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
                     ports.add(port);
                 }
             } catch (NumberFormatException ignored) {
-                // A malformed entry simply leaves that port classified as TCP.
             }
         }
         return ports;
@@ -335,7 +295,6 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
             try {
                 rules.add(new LabelRule(label, Pattern.compile(regex)));
             } catch (PatternSyntaxException ignored) {
-                // A broken pattern must not stop the recorder from starting.
             }
         }
         return rules;
@@ -384,8 +343,6 @@ public final class FlowRecorder implements Consumer<NetworkEvent> {
                 failures++;
             }
             simulated = simulated || event.simulated();
-            // Ranks come from the rule order, so a specific rule always beats the
-            // event-type fallback that a flow may have started with.
             if (label == null || candidateRank < labelRank) {
                 label = candidateLabel;
                 labelRank = candidateRank;

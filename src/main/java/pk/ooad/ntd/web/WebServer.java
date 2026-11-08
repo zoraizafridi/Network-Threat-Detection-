@@ -2,7 +2,7 @@ package pk.ooad.ntd.web;
 
 import io.javalin.Javalin;
 import io.javalin.http.Context;
-import io.javalin.http.ForbiddenResponse;
+import io.javalin.http.HandlerType;
 import io.javalin.http.staticfiles.Location;
 import org.eclipse.jetty.http.HttpCookie;
 import org.eclipse.jetty.server.session.SessionHandler;
@@ -30,7 +30,9 @@ public class WebServer {
         this.lock = new ReentrantLock();
         this.broadcaster = new StreamBroadcaster();
         this.routes = new ApiRoutes(facade, broadcaster, lock);
+        broadcaster.seed(facade.restoredAlerts());
         facade.addAlertListener(broadcaster);
+        facade.addAlertUpdateListener(broadcaster);
     }
 
     public void start(int port) {
@@ -41,6 +43,9 @@ public class WebServer {
         boolean secureCookie = Boolean.parseBoolean(config.getString("auth.session.secureCookie", "false"));
         int timeoutSeconds = Math.max(60, config.getInt("auth.session.timeoutSeconds", 28800));
         int cookieMaxAge = config.getInt("auth.session.maxAgeSeconds", 0);
+        boolean hsts = Boolean.parseBoolean(config.getString("auth.hsts.enabled", "false"));
+        int hstsMaxAge = Math.max(0, config.getInt("auth.hsts.maxAgeSeconds", 31_536_000));
+        long maxBodyBytes = Math.max(1024, config.getInt("http.maxBodyBytes", 8_388_608));
         app = Javalin.create(javalin -> {
             javalin.showJavalinBanner = false;
             javalin.jetty.modifyServletContextHandler(handler -> {
@@ -70,7 +75,18 @@ public class WebServer {
             ctx.header("X-Content-Type-Options", "nosniff");
             ctx.header("X-Frame-Options", "DENY");
             ctx.header("Referrer-Policy", "strict-origin-when-cross-origin");
+            ctx.header("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+            ctx.header("Cross-Origin-Opener-Policy", "same-origin");
+            ctx.header("Cross-Origin-Resource-Policy", "same-origin");
             ctx.header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self';");
+            if (hsts) {
+                ctx.header("Strict-Transport-Security", "max-age=" + hstsMaxAge + "; includeSubDomains");
+            }
+            if (tooLarge(ctx, maxBodyBytes)) {
+                ctx.status(413).result("");
+                ctx.skipRemainingHandlers();
+                return;
+            }
 
             String method = ctx.method().name();
             if (!method.equals("GET") && !method.equals("HEAD") && !method.equals("OPTIONS")) {
@@ -90,15 +106,24 @@ public class WebServer {
                         boolean portMatches = originPort == -1 || originPort == hostPort || (originPort == 80 && hostPort == -1);
 
                         if (!hostMatches || !portMatches) {
-                            throw new ForbiddenResponse("Forbidden: cross-origin state change rejected");
+                            ctx.status(403).result("");
+                            ctx.skipRemainingHandlers();
                         }
-                    } catch (ForbiddenResponse fr) {
-                        throw fr;
                     } catch (Exception ex) {
-                        throw new ForbiddenResponse("Forbidden: invalid origin");
+                        ctx.status(403).result("");
+                        ctx.skipRemainingHandlers();
                     }
                 }
             }
+        });
+        app.get("/healthz", ctx -> {
+            ctx.header("Cache-Control", "no-store");
+            ctx.json(Map.of("status", "ok"));
+        });
+        app.exception(Exception.class, (exception, ctx) -> {
+            pk.ooad.ntd.util.EventLog.getInstance().log(pk.ooad.ntd.util.LogLevel.ERROR,
+                    "http", ctx.method().name() + " " + ctx.path() + " failed: " + exception);
+            ctx.status(500).json(Map.of("error", "internal server error"));
         });
         routes.register(app);
         app.start(port);
@@ -114,6 +139,23 @@ public class WebServer {
 
     public int port() {
         return app == null ? requestedPort : app.port();
+    }
+
+    private static boolean tooLarge(Context ctx, long limit) {
+        String declared = ctx.header("Content-Length");
+        if (declared != null && !declared.isBlank()) {
+            try {
+                return Long.parseLong(declared.trim()) > limit;
+            } catch (NumberFormatException ex) {
+                return true;
+            }
+        }
+        HandlerType method = ctx.method();
+        if (method == HandlerType.GET || method == HandlerType.HEAD || method == HandlerType.OPTIONS) {
+            return false;
+        }
+        String body = ctx.body();
+        return body != null && body.length() > limit;
     }
 
     private static boolean classpathWebPresent() {

@@ -129,4 +129,3 @@ class EnumsTest {
         assertThrows(NullPointerException.class, () -> EventType.valueOf(null));
     }
 }
-

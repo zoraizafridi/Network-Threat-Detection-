@@ -26,9 +26,25 @@ public class Incident {
         addAlert(firstAlert);
     }
 
+    public Incident(String id, String sourceIp, Instant openedAt, IncidentStatus status, List<Alert> restored) {
+        this.id = Objects.requireNonNull(id, "id must not be null");
+        this.sourceIp = sourceIp == null ? "" : sourceIp;
+        this.openedAt = openedAt;
+        this.status = status == null ? IncidentStatus.OPEN : status;
+        if (restored != null) {
+            for (Alert alert : restored) {
+                addAlert(alert);
+            }
+        }
+    }
+
     public void addAlert(Alert alert) {
         Objects.requireNonNull(alert, "alert must not be null");
         if (!alerts.contains(alert)) alerts.add(alert);
+    }
+
+    public List<String> alertIds() {
+        return alerts.stream().map(Alert::getId).toList();
     }
 
     public Severity getHighestSeverity() {

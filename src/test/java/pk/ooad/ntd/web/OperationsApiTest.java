@@ -22,12 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * The operations endpoints added in phases 8 to 12, exercised with every new
- * capability at its default of disabled. The point is that "off" is visible and
- * honest: the status endpoints answer 200 with {@code enabled=false}, the write
- * endpoints answer 409, and authorisation is still enforced before either.
- */
 class OperationsApiTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -172,8 +166,6 @@ class OperationsApiTest {
         for (JsonNode entry : body.get("entries")) {
             if ("auth.login".equals(entry.get("action").asText())) {
                 assertEquals("ALLOWED", entry.get("outcome").asText());
-                // Both sessions were opened by this test, so both logins belong
-                // to the trail; the point is that the admin one is present.
                 if ("admin".equals(entry.get("actor").asText())) {
                     adminLoginRecorded = true;
                 }

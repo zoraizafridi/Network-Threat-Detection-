@@ -51,8 +51,6 @@ export function FlowsPage() {
     const cancelled = () => stop;
     async function tick() {
       await pull(cancelled);
-      // Stored records only change when something writes them, so polling them
-      // would refresh a table that cannot have moved.
       if (!stop && live && source === "live") {
         timer = window.setTimeout(tick, REFRESH_MS);
       }

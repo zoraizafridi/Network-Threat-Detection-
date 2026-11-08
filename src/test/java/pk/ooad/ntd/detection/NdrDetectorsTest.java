@@ -138,10 +138,111 @@ class NdrDetectorsTest {
     }
 
     @Test
+    @DisplayName("An allowlisted address is exempt from beaconing and exfiltration")
+    void allowlistsExemptKnownTraffic() {
+        BeaconingDetector exempt = new BeaconingDetector("BeaconingDetector", true, 3, 0.25, 5, 900, 100, 0,
+                List.of("10.0.3.0/24"));
+        for (int i = 0; i <= 5; i++) {
+            assertTrue(exempt.analyze(event(i, base.plusSeconds(10L * i), "10.0.3.9", "198.51.100.9",
+                    8443, 200, EventType.CONNECT, true, "SYN")).isEmpty(),
+                    "an allowlisted source is exempt");
+        }
+        assertEquals(0, exempt.trackedSeries(), "an exempt source is not even tracked");
+
+        BeaconingDetector judged = new BeaconingDetector("BeaconingDetector", true, 3, 0.25, 5, 900, 100, 0);
+        Optional<Alert> alert = Optional.empty();
+        for (int i = 0; i <= 3; i++) {
+            alert = judged.analyze(event(100 + i, base.plusSeconds(10L * i), "10.0.3.9", "198.51.100.9",
+                    8443, 200, EventType.CONNECT, true, "SYN"));
+        }
+        assertTrue(alert.isPresent(), "the same traffic alerts when no list is set");
+
+        DataExfilDetector exfil = new DataExfilDetector("DataExfilDetector", true, 300, 1_000, 100, 0,
+                List.of("203.0.113.0/24"), List.of("10."));
+        assertTrue(exfil.analyze(event(200, base, "10.0.0.5", "203.0.113.9", 443, 5_000,
+                EventType.DATA_TRANSFER, true, "DUMP")).isEmpty(), "an allowlisted destination is exempt");
+        assertTrue(exfil.analyze(event(201, base, "10.0.0.5", "198.51.100.9", 443, 600,
+                EventType.DATA_TRANSFER, true, "DUMP")).isEmpty(), "under the ceiling");
+        assertTrue(exfil.analyze(event(202, base, "10.0.0.5", "198.51.100.9", 443, 600,
+                EventType.DATA_TRANSFER, true, "DUMP")).isPresent(),
+                "a destination that is not on the list still alerts");
+    }
+
+    @Test
+    @DisplayName("A payload match names the indicator, its type and its category")
+    void threatIntelMatchesPayload() {
+        String feed = """
+                [{"type":"domain","value":"update.example.org","category":"c2","confidence":95},
+                 {"type":"sha256","value":"2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae","category":"malware","confidence":90}]
+                """;
+        ThreatIntelDetector detector = new ThreatIntelDetector("ThreatIntelDetector",
+                ThreatIntel.parse(feed, "json", Severity.LOW), true);
+
+        Optional<Alert> domain = detector.analyze(event(1, base, "10.0.0.5", "10.0.0.9", 443, 100,
+                EventType.REQUEST, true, "GET https://update.example.org/loader.bin"));
+        assertTrue(domain.isPresent());
+        assertEquals(Severity.CRITICAL, domain.get().getSeverity());
+        assertTrue(domain.get().getDescription().contains("domain indicator update.example.org"));
+        assertTrue(domain.get().getDescription().contains("category c2"));
+
+        Optional<Alert> digest = detector.analyze(event(2, base, "10.0.0.5", "10.0.0.9", 443, 100,
+                EventType.DATA_TRANSFER, true,
+                "POST sha256=2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"));
+        assertTrue(digest.isPresent());
+        assertEquals(AttackType.DATA_TRANSFER, digest.get().getAttackType());
+        assertTrue(detector.analyze(event(3, base, "10.0.0.5", "10.0.0.9", 443, 100,
+                EventType.REQUEST, true, "GET /index.html")).isEmpty());
+    }
+
+    @Test
+    @DisplayName("Flood detector: threshold crossing from several sources, window expiry, allowlist, disabled by default")
+    void floodDetectsDistributedVolume() {
+        FloodDetector detector = new FloodDetector("FloodDetector", true, 60, 5, 100, 300, List.of("10.0.0.99"));
+
+        Optional<Alert> alert = Optional.empty();
+        for (int i = 0; i < 5; i++) {
+            assertTrue(detector.analyze(event(i, base.plusSeconds(i), "10.0.0." + (10 + i), "10.0.0.2",
+                    80, 100, EventType.CONNECT, true, "")).isEmpty());
+        }
+        alert = detector.analyze(event(5, base.plusSeconds(5), "10.0.0.15", "10.0.0.2",
+                80, 100, EventType.CONNECT, true, ""));
+        assertTrue(alert.isPresent(), "crossing maxConnections must raise an alert");
+        assertEquals(AttackType.DOS_FLOOD, alert.get().getAttackType());
+        assertEquals(Severity.HIGH, alert.get().getSeverity());
+        assertTrue(alert.get().getDescription().contains("10.0.0.2"));
+        assertTrue(alert.get().getDescription().contains("6 connections"));
+        assertTrue(alert.get().getDescription().contains("6 distinct sources"));
+
+        assertTrue(detector.analyze(event(6, base.plusSeconds(6), "10.0.0.16", "10.0.0.2",
+                80, 100, EventType.CONNECT, true, "")).isEmpty(), "cooldown applies");
+
+        FloodDetector windowDetector = new FloodDetector("WindowExpiry", true, 10, 3, 100, 0);
+        for (int i = 0; i < 3; i++) {
+            assertTrue(windowDetector.analyze(event(20 + i, base.plusSeconds(i), "10.0.0." + i, "10.0.0.3",
+                    80, 100, EventType.CONNECT, true, "")).isEmpty());
+        }
+        assertTrue(windowDetector.analyze(event(23, base.plusSeconds(15), "10.0.0.4", "10.0.0.3",
+                80, 100, EventType.CONNECT, true, "")).isEmpty(), "window expiry resets the count");
+
+        FloodDetector allowlistDetector = new FloodDetector("Allowlist", true, 60, 2, 100, 0, List.of("10.0.0.99"));
+        for (int i = 0; i < 5; i++) {
+            assertTrue(allowlistDetector.analyze(event(30 + i, base.plusSeconds(i), "10.0.0." + i, "10.0.0.99",
+                    80, 100, EventType.CONNECT, true, "")).isEmpty(), "allowlisted destination never alerts");
+        }
+
+        FloodDetector disabled = new FloodDetector("Disabled", false, 60, 2, 100, 0);
+        for (int i = 0; i < 5; i++) {
+            assertTrue(disabled.analyze(event(40 + i, base.plusSeconds(i), "10.0.0." + i, "10.0.0.4",
+                    80, 100, EventType.CONNECT, true, "")).isEmpty());
+        }
+        assertFalse(disabled.isEnabled());
+    }
+
+    @Test
     @DisplayName("The NDR detector set is additive and silent unless configured")
     void ndrSetIsOffByDefault() {
         List<Detector> ndr = new DetectorFactory().createNdr();
-        assertEquals(4, ndr.size());
+        assertEquals(5, ndr.size());
         NetworkEvent plain = event(1, base, "10.0.0.5", "10.0.0.9", 80, 100,
                 EventType.REQUEST, true, "GET");
         for (Detector detector : ndr) {

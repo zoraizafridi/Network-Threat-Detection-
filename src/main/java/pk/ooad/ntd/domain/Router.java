@@ -32,4 +32,3 @@ public class Router extends NetworkAsset {
         this.interfaceCount = interfaceCount;
     }
 }
-

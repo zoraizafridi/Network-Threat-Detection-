@@ -58,7 +58,6 @@ class AlertTest {
             factory.create(Severity.LOW, null, "1.1.1.1", "2.2.2.2", "det", "desc", now)
         );
 
-        // Null time defaults to non-null current instant
         Alert alert = factory.create(Severity.LOW, AttackType.DATA_TRANSFER, "1.1.1.1", "2.2.2.2", "det", "desc", null);
         assertNotNull(alert.getTimestamp());
     }
@@ -79,4 +78,3 @@ class AlertTest {
         assertTrue(a1.toString().contains("alert-1"));
     }
 }
-

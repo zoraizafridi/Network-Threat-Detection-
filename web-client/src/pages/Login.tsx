@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { gsap } from "gsap";
 import { HttpStatusError, readJson } from "../api";
+import { DemoBanner } from "../components/DemoBanner";
 import { useApp } from "../store";
 import { useReducedMotion } from "../useReducedMotion";
 import { SYSTEM_NAME } from "../brand";
@@ -65,6 +66,7 @@ export function Login() {
         </div>
         <form className="access-form" onSubmit={submit}>
           <p className="access-kicker">Authenticate</p>
+          <DemoBanner detail />
           <label>
             Username
             <input

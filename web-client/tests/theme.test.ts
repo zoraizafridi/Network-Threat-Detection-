@@ -6,7 +6,6 @@ const SRC = join(process.cwd(), "src");
 const SOURCE_FILE = /\.(css|ts|tsx)$/;
 const WHITE = /#fff(?:fff)?\b/gi;
 const TEXT_PROPERTIES = new Set(["color", "fill", "-webkit-text-fill-color", "caret-color", "text-decoration-color"]);
-/* White text is only allowed on a filled control, so name the exact file here if that ever happens. */
 const ALLOW: string[] = [];
 
 function walk(dir: string): string[] {
@@ -110,9 +109,6 @@ describe("palette tokens", () => {
 });
 
 describe("map sizing", () => {
-  /* A 65vh minimum on the flat map won on specificity over the stage's fixed height
-     and pushed the SVG past the card border, so the drawing was clipped at the
-     bottom. The map fills its stage, never the viewport. */
   it("never sizes the flat map with viewport units", () => {
     const css = readFileSync(join(SRC, "styles.css"), "utf8");
     const offenders = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]

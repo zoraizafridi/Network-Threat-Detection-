@@ -1,5 +1,6 @@
 import { AssetIcon, statusClass } from "./AssetIcon";
 import type { FeedAlert } from "../alerts";
+import { useApp } from "../store";
 import type { Asset, NetLink } from "../types";
 
 export function HostPanel({
@@ -13,6 +14,7 @@ export function HostPanel({
   alerts: FeedAlert[];
   history: number[];
 }) {
+  const containedIps = useApp((state) => state.containedIps);
   if (!asset) {
     return (
       <section className="panel">
@@ -21,6 +23,7 @@ export function HostPanel({
       </section>
     );
   }
+  const contained = containedIps.includes(asset.ip);
   const related = links.filter((link) => link.source === asset.id || link.target === asset.id);
   const recent = alerts.filter((alert) => alert.sourceIp === asset.ip || alert.targetIp === asset.ip).slice(-8);
   return (
@@ -33,6 +36,12 @@ export function HostPanel({
         {asset.type} · criticality {asset.criticality}
       </p>
       <p className={statusClass(asset.status)}>{asset.status}</p>
+      {contained ? (
+        <p className="badge isolated">
+          <i />
+          Contained. Traffic from this address is dropped when the mode is IPS.
+        </p>
+      ) : null}
       <p>Risk score {asset.riskScore} of 100</p>
       <RiskChart values={history.length ? history : [asset.riskScore]} />
       <h3>Links</h3>

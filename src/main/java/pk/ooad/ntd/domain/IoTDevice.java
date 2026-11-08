@@ -46,4 +46,3 @@ public class IoTDevice extends NetworkAsset {
         this.defaultCredentials = defaultCredentials;
     }
 }
-

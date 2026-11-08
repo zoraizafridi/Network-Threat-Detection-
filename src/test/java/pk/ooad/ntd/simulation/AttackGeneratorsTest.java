@@ -115,4 +115,3 @@ class AttackGeneratorsTest {
         assertThrows(NullPointerException.class, () -> dt.generate("1.1.1.1", "2.2.2.2", now, null));
     }
 }
-

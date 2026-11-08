@@ -23,14 +23,12 @@ class RunningStatsTest {
         assertEquals(0.0, stats.getM2());
         assertEquals(0.0, stats.getStdDev(), "StdDev must be 0 for a single value");
 
-        // Second value: sample variance for [10, 20] is 50, stdDev is ~7.071
         stats.update(20.0);
         assertEquals(2, stats.getCount());
         assertEquals(15.0, stats.getMean());
         assertEquals(50.0, stats.getM2());
         assertEquals(Math.sqrt(50.0), stats.getStdDev(), 1e-6);
 
-        // Third value: [10, 20, 30] -> mean = 20, sample variance = 100, stdDev = 10
         stats.update(30.0);
         assertEquals(3, stats.getCount());
         assertEquals(20.0, stats.getMean());
@@ -59,7 +57,6 @@ class RunningStatsTest {
     @DisplayName("zScore calculation and reset contract")
     void testZScoreCalculationAndReset() {
         RunningStats stats = new RunningStats();
-        // [10, 20, 30] -> mean = 20, stdDev = 10
         stats.update(10.0);
         stats.update(20.0);
         stats.update(30.0);
@@ -76,4 +73,3 @@ class RunningStatsTest {
         assertEquals(0.0, stats.getStdDev());
     }
 }
-

@@ -16,6 +16,7 @@ const PRIMARY = MAP.ringHealthy;
 const WARN = MAP.probed;
 const CRITICAL = MAP.compromised;
 const ISOLATED = MAP.isolated;
+const CONTAINED = MAP.contained;
 const ACCENT = MAP.selection;
 const LINE = MAP.link;
 const SCENE_COLOR = MAP.bg;
@@ -117,6 +118,7 @@ function HostNode({
 }) {
   const group = useRef<THREE.Group>(null);
   const shockMesh = useRef<THREE.Mesh>(null);
+  const contained = useApp((state) => state.containedIps.includes(asset.ip));
   const tint = statusTint(mark || asset.status);
   const ring = tint ?? PRIMARY;
   const body = tint ?? NEUTRAL;
@@ -225,6 +227,7 @@ function HostNode({
         </mesh>
       ) : null}
       {excluded ? <Line points={ringPoints(1.7)} color={ISOLATED} dashed dashSize={0.18} gapSize={0.12} lineWidth={2} /> : null}
+      {contained ? <Line points={ringPoints(2.05)} color={CONTAINED} dashed dashSize={0.14} gapSize={0.1} lineWidth={2} /> : null}
       {warned ? <Line points={ringPoints(1.9)} color={WARN} lineWidth={2} /> : null}
       <mesh ref={shockMesh} visible={false} position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[1.1, 1.2, 40]} />
@@ -271,8 +274,6 @@ function MapGround() {
         depthWrite: false,
         uniforms: { tint: { value: new THREE.Color(MAP.groundLine) } },
         vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
-        /* One cell is one world unit, every fourth line is brighter, and both fade
-           out before the rim so the plate edge never shows a hard cut. */
         fragmentShader:
           "varying vec2 vUv; uniform vec3 tint; void main(){ float r = length(vUv - 0.5) * 2.0; float radial = 1.0 - smoothstep(0.45, 0.98, r); vec2 minorCell = abs(fract(vUv * 60.0 - 0.5) - 0.5); vec2 majorCell = abs(fract(vUv * 15.0 - 0.5) - 0.5); float minor = 1.0 - smoothstep(0.0, 0.035, min(minorCell.x, minorCell.y)); float major = 1.0 - smoothstep(0.0, 0.012, min(majorCell.x, majorCell.y)); float alpha = (minor * 0.16 + major * 0.5) * radial; gl_FragColor = vec4(tint, alpha); }",
       }),
@@ -545,7 +546,6 @@ function Scene({
     }
   });
 
-  // A hovered host counts as an active focus, so the camera holds still while the pointer is on it.
   const rotating = shouldAutoRotate({
     enabled: autoRotate,
     reducedMotion,
@@ -579,9 +579,7 @@ function Scene({
       <WatchFps onSlow={onSlow} />
       <hemisphereLight color={MAP_HEMI.skyColor} groundColor={MAP_HEMI.groundColor} intensity={MAP_HEMI.intensity} />
       <directionalLight color={MAP_DIR.color} intensity={MAP_DIR.intensity} position={MAP_DIR.position} castShadow={shadows} shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-radius={3} />
-      {/* The camera sits about 75 units out, so the fog has to start past the node
-          ring. A near plane of 20 used to swallow every lit mesh while the lines,
-          which ignore fog, stayed visible. */}
+
       <fog attach="fog" args={[SCENE_COLOR, 70, 170]} />
       <ContactShadows position={[0, -0.34, 0]} opacity={0.4} scale={48} blur={2.5} far={10} color="#000000" />
       <mesh
@@ -745,6 +743,7 @@ function FlatMap({ assets, selectedId, onSelect, attack, phase }: {
 }) {
   const placed = useMemo(() => placeNodes(assets), [assets]);
   const lines = useMemo(() => topology(placed), [placed]);
+  const containedIps = useApp((state) => state.containedIps);
   const live = phase === "traveling" || phase === "impact";
   const path = attack ? (attack.pathIds ?? route(lines, attack.sourceId, attack.targetId)) : [];
   const involved = new Set(path);
@@ -754,14 +753,9 @@ function FlatMap({ assets, selectedId, onSelect, attack, phase }: {
     if (status && status !== "NORMAL") return hex(MAP.isolated);
     return hex(MAP.nodeHealthy);
   };
-  /* Nodes are placed in a 48 unit circle, so the SVG needs a matching viewBox.
-     Without one each unit maps to a pixel and the map renders as a small cluster
-     in the top left corner of a much larger element. */
   const view = useMemo(() => {
     const xs = placed.map((node) => node.position[0]);
     const zs = placed.map((node) => node.position[2]);
-    /* The pad leaves room for the ground plate, which is drawn a little wider than
-       the outermost ring so the plate edge is always inside the frame. */
     const pad = 13;
     const minX = (xs.length > 0 ? Math.min(...xs) : -22) + 24 - pad;
     const maxX = (xs.length > 0 ? Math.max(...xs) : 22) + 24 + pad;
@@ -784,7 +778,7 @@ function FlatMap({ assets, selectedId, onSelect, attack, phase }: {
           <stop offset="72%" stopColor="#0B1A11" stopOpacity="0.9" />
           <stop offset="100%" stopColor="#07100B" stopOpacity="0.55" />
         </radialGradient>
-        {/* Six world units per cell keeps the grid readable without crowding the rings. */}
+
         <pattern id="flat-grid" width="6" height="6" patternUnits="userSpaceOnUse">
           <path className="flat-grid-line" d="M6 0H0V6" fill="none" strokeWidth="0.07" />
         </pattern>
@@ -792,8 +786,7 @@ function FlatMap({ assets, selectedId, onSelect, attack, phase }: {
           <polygon points="0 0, 3 1.1, 0 2.2" fill={hex(MAP.link)} />
         </marker>
       </defs>
-      {/* Same idea as the 3D scene: a plate laid on top of the page background, with a
-         grid and a rim, so the ground is never confused with the empty canvas. */}
+
       <g className="flat-ground" aria-hidden="true">
         <circle cx={24} cy={24} r={30} fill="url(#flat-plate)" />
         <circle cx={24} cy={24} r={30} fill="url(#flat-grid)" />
@@ -826,13 +819,14 @@ function FlatMap({ assets, selectedId, onSelect, attack, phase }: {
         const r = core ? 2.6 : (onPath || selected ? 2.1 : 1.5);
         const cx = node.position[0] + 24;
         const cy = 24 - node.position[2];
+        const contained = containedIps.includes(node.asset.ip);
         return (
           <g
             key={node.asset.id}
             className="flat-node"
             role="button"
             tabIndex={0}
-            aria-label={`${node.asset.name}, ${node.asset.status.toLowerCase()}`}
+            aria-label={`${node.asset.name}, ${node.asset.status.toLowerCase()}${contained ? ", contained" : ""}`}
             onClick={(e) => { e.stopPropagation(); onSelect(node.asset.id); }}
             onKeyDown={(e) => {
               if (e.key !== "Enter" && e.key !== " ") return;
@@ -843,6 +837,17 @@ function FlatMap({ assets, selectedId, onSelect, attack, phase }: {
             <title>{`${node.asset.name} (${node.asset.ip}) - ${node.asset.status}`}</title>
             <circle cx={cx} cy={cy} r={r + 0.7} fill={hex(MAP.ringHealthy)} fillOpacity={selected ? 1 : 0.35} />
             <circle className="flat-node-dot" cx={cx} cy={cy} r={r} fill={t} fillOpacity={1} />
+            {contained ? (
+              <circle
+                cx={cx}
+                cy={cy}
+                r={r + 1.3}
+                fill="none"
+                stroke={hex(MAP.contained)}
+                strokeWidth={0.32}
+                strokeDasharray="0.55 0.35"
+              />
+            ) : null}
             {selected ? <circle cx={cx} cy={cy} r={r + 1.1} fill="none" stroke={hex(MAP.selection)} strokeWidth={0.45} /> : null}
           </g>
         );
@@ -869,7 +874,6 @@ export function NetworkStage(props: {
   const [mode, setMode] = useState<"3d" | "2d">(webglOk() ? "3d" : "2d");
   const [tier, setTier] = useState(0);
   const reduced = useReducedMotion();
-  // The rotation choice stays in component state only, never in storage.
   const [rotateOn, setRotateOn] = useState(true);
   const rotate = rotateOn && !reduced;
   const flat = mode === "2d";

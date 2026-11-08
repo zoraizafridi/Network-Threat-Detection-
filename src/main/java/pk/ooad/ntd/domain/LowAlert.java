@@ -14,4 +14,3 @@ public class LowAlert extends Alert {
         return 5.0;
     }
 }
-

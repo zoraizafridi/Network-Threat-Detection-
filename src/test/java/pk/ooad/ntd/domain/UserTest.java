@@ -48,7 +48,6 @@ class UserTest {
     @Test
     @DisplayName("Password checking: Plaintext and SHA-256 hashed password verification")
     void testPasswordChecking() {
-        // SHA-256 for "secret"
         String sha256OfSecret = "2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b";
         Admin userWithHash = new Admin("alice", sha256OfSecret);
 
@@ -61,7 +60,6 @@ class UserTest {
         assertTrue(plainUser.checkPassword("plainP@ss"), "Direct password match supported");
         assertFalse(plainUser.checkPassword("other"), "Wrong password must return false");
 
-        // Salted hash
         String salt = "testSalt";
         try {
             java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");

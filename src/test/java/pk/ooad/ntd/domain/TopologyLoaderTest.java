@@ -27,11 +27,9 @@ class TopologyLoaderTest {
         Collection<NetworkAsset> assets = network.getAssets();
         int nodeCount = assets.size();
 
-        // 1. Must contain 15 to 25 nodes
         assertTrue(nodeCount >= 15 && nodeCount <= 25,
             "Node count must be between 15 and 25 (was " + nodeCount + ")");
 
-        // 2. All four asset types must be present
         Set<AssetType> presentTypes = EnumSet.noneOf(AssetType.class);
         for (NetworkAsset asset : assets) {
             presentTypes.add(asset.getType());
@@ -42,17 +40,12 @@ class TopologyLoaderTest {
         assertTrue(presentTypes.contains(AssetType.ROUTER));
         assertTrue(presentTypes.contains(AssetType.IOT_DEVICE));
 
-        // 3. Must prove isConnected() is true
         assertTrue(network.isConnected(), "TopologyLoader.loadSample() network must be connected");
 
-        // 4. Must contain cycles:
-        // A connected graph with V vertices and E >= V edges mathematically must contain cycles.
         int edgeCount = network.getLinks().size();
         assertTrue(edgeCount >= nodeCount,
             "Edge count (" + edgeCount + ") must be >= node count (" + nodeCount + ") to ensure cycles");
 
-        // Explicit cycle verification in the core router backbone:
-        // rt-core-1 -> rt-core-2 -> rt-dist-1 -> rt-core-1
         NetworkAsset r1 = network.getAsset("rt-core-1");
         NetworkAsset r2 = network.getAsset("rt-core-2");
         NetworkAsset r3 = network.getAsset("rt-dist-1");
@@ -160,4 +153,3 @@ class TopologyLoaderTest {
         );
     }
 }
-

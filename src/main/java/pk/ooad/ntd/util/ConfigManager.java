@@ -13,11 +13,7 @@ public final class ConfigManager {
     private final Properties props = new Properties();
 
     private ConfigManager() {
-        try (InputStream input = ConfigManager.class.getClassLoader().getResourceAsStream("config.properties")) {
-            if (input != null) props.load(input);
-        } catch (IOException | IllegalArgumentException e) {
-            throw new InvalidConfigException("Unable to load classpath configuration file: config.properties", e);
-        }
+        props.putAll(packaged());
     }
 
     public static ConfigManager getInstance() {
@@ -29,6 +25,24 @@ public final class ConfigManager {
             }
         }
         return instance;
+    }
+
+    public synchronized void reload() {
+        Properties packaged = packaged();
+        props.clear();
+        props.putAll(packaged);
+    }
+
+    private static Properties packaged() {
+        Properties loaded = new Properties();
+        try (InputStream input = ConfigManager.class.getClassLoader().getResourceAsStream("config.properties")) {
+            if (input != null) {
+                loaded.load(input);
+            }
+        } catch (IOException | IllegalArgumentException e) {
+            throw new InvalidConfigException("Unable to load classpath configuration file: config.properties", e);
+        }
+        return loaded;
     }
 
     public synchronized void load(String path) {
@@ -47,6 +61,28 @@ public final class ConfigManager {
         }
         props.clear();
         props.putAll(loaded);
+    }
+
+    public synchronized int overlay(String path) {
+        if (path == null || path.isBlank()) {
+            throw new InvalidConfigException("Configuration file path must not be blank");
+        }
+        Path configPath = Path.of(path);
+        if (!Files.isRegularFile(configPath)) {
+            throw new InvalidConfigException("Configuration file not found: " + path);
+        }
+        Properties layer = new Properties();
+        try (InputStream input = Files.newInputStream(configPath)) {
+            layer.load(input);
+        } catch (IOException | IllegalArgumentException e) {
+            throw new InvalidConfigException("Unable to load configuration file: " + path, e);
+        }
+        props.putAll(layer);
+        return layer.size();
+    }
+
+    public synchronized boolean has(String key) {
+        return key != null && props.getProperty(key) != null;
     }
 
     public int getInt(String key, int def) {
@@ -85,12 +121,6 @@ public final class ConfigManager {
                 .toList();
     }
 
-    /**
-     * Resolves a key. A system property named {@code ntd.<key>} wins over the
-     * properties file, which is how a demo or a test turns a single feature on
-     * without editing the packaged configuration:
-     * {@code -Dntd.detection.beaconing.enabled=true}.
-     */
     private String valueFor(String key) {
         if (key == null || key.isBlank()) {
             throw new InvalidConfigException("Configuration key must not be blank");

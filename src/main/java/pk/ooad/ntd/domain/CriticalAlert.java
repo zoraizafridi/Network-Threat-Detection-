@@ -14,4 +14,3 @@ public class CriticalAlert extends Alert {
         return 50.0;
     }
 }
-

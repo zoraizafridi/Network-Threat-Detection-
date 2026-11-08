@@ -97,4 +97,3 @@ public class RateThresholdDetector extends Detector {
         return Collections.unmodifiableMap(failuresBySource);
     }
 }
-

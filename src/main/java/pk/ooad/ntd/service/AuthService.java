@@ -24,4 +24,13 @@ public class AuthService {
         }
         return user;
     }
+
+    public boolean verify(String username, String password) {
+        try {
+            login(username, password);
+            return true;
+        } catch (AuthenticationException ex) {
+            return false;
+        }
+    }
 }

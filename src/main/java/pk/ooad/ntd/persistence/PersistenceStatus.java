@@ -1,11 +1,5 @@
 package pk.ooad.ntd.persistence;
 
-/**
- * What the durable store is doing, as the operator sees it.
- *
- * <p>{@code droppedRows} is the honest part of this record: a full queue or a
- * failing disk loses rows, and the count is reported instead of hidden.</p>
- */
 public record PersistenceStatus(
         boolean enabled,
         String databasePath,

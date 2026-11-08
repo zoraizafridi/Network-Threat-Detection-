@@ -10,26 +10,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-/**
- * Owns the SQLite file: the schema, one write connection and one read
- * connection.
- *
- * <p>Two connections are opened on purpose. SQLite in write-ahead logging mode
- * allows many readers alongside a single writer, so the HTTP threads never wait
- * behind the write-behind batch. The rule that keeps this safe is simple: the
- * write connection is touched only by the persistence worker thread, and the
- * read connection is touched only through the synchronised repository readers.</p>
- *
- * <p>The schema carries a {@code user_version} so a later phase can migrate an
- * existing file instead of silently mismatching it.</p>
- */
 final class Database implements AutoCloseable {
 
-    static final int SCHEMA_VERSION = 1;
+    static final int SCHEMA_VERSION = 2;
 
     static {
-        // Loading the driver explicitly keeps the shaded jar honest: relying on
-        // ServiceLoader alone would break if the service file is ever filtered.
         try {
             Class.forName("org.sqlite.JDBC");
         } catch (ClassNotFoundException ex) {
@@ -52,11 +37,21 @@ final class Database implements AutoCloseable {
             }
         }
         String url = "jdbc:sqlite:" + this.file;
-        writer = DriverManager.getConnection(url);
-        reader = DriverManager.getConnection(url);
-        configure(writer);
-        configure(reader);
-        migrate();
+        Connection openedWriter = null;
+        Connection openedReader = null;
+        try {
+            openedWriter = DriverManager.getConnection(url);
+            openedReader = DriverManager.getConnection(url);
+            configure(openedWriter);
+            configure(openedReader);
+            this.writer = openedWriter;
+            this.reader = openedReader;
+            migrate();
+        } catch (SQLException | RuntimeException ex) {
+            closeQuietly(openedReader);
+            closeQuietly(openedWriter);
+            throw ex;
+        }
     }
 
     Connection writer() {
@@ -71,7 +66,6 @@ final class Database implements AutoCloseable {
         return file;
     }
 
-    /** Reads {@code PRAGMA user_version}, used by the tests to prove migration ran. */
     int schemaVersion() throws SQLException {
         synchronized (reader) {
             try (Statement statement = reader.createStatement();
@@ -89,9 +83,6 @@ final class Database implements AutoCloseable {
 
     private static void configure(Connection connection) throws SQLException {
         try (Statement statement = connection.createStatement()) {
-            // WAL lets the reader run while a batch commits; NORMAL keeps the
-            // write cost low because losing the last batch on a power cut is an
-            // acceptable trade for a monitoring tool.
             statement.execute("PRAGMA journal_mode=WAL");
             statement.execute("PRAGMA synchronous=NORMAL");
             statement.execute("PRAGMA busy_timeout=5000");
@@ -99,6 +90,21 @@ final class Database implements AutoCloseable {
     }
 
     private void migrate() throws SQLException {
+        int current = readVersion();
+        if (current > SCHEMA_VERSION) {
+            throw new SQLException("The database at " + file + " was written by a newer build (schema "
+                    + current + ", this build understands " + SCHEMA_VERSION + ")");
+        }
+        if (current < 1) {
+            applyV1();
+        }
+        if (current < 2) {
+            applyV2();
+        }
+        writeVersion(SCHEMA_VERSION);
+    }
+
+    private void applyV1() throws SQLException {
         try (Statement statement = writer.createStatement()) {
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS flows (
@@ -134,9 +140,116 @@ final class Database implements AutoCloseable {
                     )
                     """);
             statement.execute("CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts_ms DESC)");
-            try (PreparedStatement version = writer.prepareStatement("PRAGMA user_version = " + SCHEMA_VERSION)) {
-                version.execute();
+        }
+    }
+
+    private void applyV2() throws SQLException {
+        try (Statement statement = writer.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS incidents (
+                        id               TEXT PRIMARY KEY,
+                        opened_ms        INTEGER NOT NULL,
+                        source_ip        TEXT    NOT NULL,
+                        status           TEXT    NOT NULL,
+                        highest_severity TEXT    NOT NULL,
+                        alert_ids        TEXT    NOT NULL
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS incidents_opened ON incidents(opened_ms DESC)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS containment_actions (
+                        ip         TEXT PRIMARY KEY,
+                        blocked_ms INTEGER NOT NULL,
+                        expires_ms INTEGER NOT NULL,
+                        reason     TEXT    NOT NULL,
+                        actor      TEXT    NOT NULL,
+                        automatic  INTEGER NOT NULL,
+                        released   INTEGER NOT NULL
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS containment_blocked"
+                    + " ON containment_actions(blocked_ms DESC)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS audit_entries (
+                        ts_ms   INTEGER NOT NULL,
+                        actor   TEXT    NOT NULL,
+                        action  TEXT    NOT NULL,
+                        target  TEXT    NOT NULL,
+                        outcome TEXT    NOT NULL,
+                        detail  TEXT    NOT NULL
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS audit_ts ON audit_entries(ts_ms DESC)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS notifications (
+                        id          TEXT PRIMARY KEY,
+                        ts_ms       INTEGER NOT NULL,
+                        severity    TEXT    NOT NULL,
+                        attack_type TEXT    NOT NULL,
+                        source_ip   TEXT    NOT NULL,
+                        target_ip   TEXT    NOT NULL,
+                        summary     TEXT    NOT NULL,
+                        channel     TEXT    NOT NULL
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS notifications_ts ON notifications(ts_ms DESC)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS evidence_manifests (
+                        directory     TEXT PRIMARY KEY,
+                        created_ms    INTEGER NOT NULL,
+                        files         INTEGER NOT NULL,
+                        bytes         INTEGER NOT NULL,
+                        manifest_hash TEXT    NOT NULL
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS evidence_created"
+                    + " ON evidence_manifests(created_ms DESC)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS ml_model (
+                        id         INTEGER PRIMARY KEY CHECK (id = 1),
+                        trained_ms INTEGER NOT NULL,
+                        state      TEXT    NOT NULL,
+                        samples    INTEGER NOT NULL,
+                        clusters   INTEGER NOT NULL,
+                        threshold  REAL    NOT NULL
+                    )
+                    """);
+            addColumn(statement, "alerts", "occurrences", "INTEGER NOT NULL DEFAULT 1");
+            addColumn(statement, "alerts", "first_seen_ms", "INTEGER NOT NULL DEFAULT 0");
+            addColumn(statement, "alerts", "last_seen_ms", "INTEGER NOT NULL DEFAULT 0");
+            addColumn(statement, "alerts", "status", "TEXT NOT NULL DEFAULT 'NEW'");
+        }
+    }
+
+    private void addColumn(Statement statement, String table, String column, String definition)
+            throws SQLException {
+        if (hasColumn(statement, table, column)) {
+            return;
+        }
+        statement.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+    }
+
+    private static boolean hasColumn(Statement statement, String table, String column) throws SQLException {
+        try (ResultSet rows = statement.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (rows.next()) {
+                if (column.equalsIgnoreCase(rows.getString("name"))) {
+                    return true;
+                }
             }
+            return false;
+        }
+    }
+
+    private int readVersion() throws SQLException {
+        try (Statement statement = writer.createStatement();
+             ResultSet rows = statement.executeQuery("PRAGMA user_version")) {
+            return rows.next() ? rows.getInt(1) : 0;
+        }
+    }
+
+    private void writeVersion(int version) throws SQLException {
+        try (PreparedStatement statement = writer.prepareStatement("PRAGMA user_version = " + version)) {
+            statement.execute();
         }
     }
 
@@ -144,7 +257,6 @@ final class Database implements AutoCloseable {
         try {
             connection.close();
         } catch (SQLException ignored) {
-            // Closing is best effort: the process is on its way down anyway.
         }
     }
 }

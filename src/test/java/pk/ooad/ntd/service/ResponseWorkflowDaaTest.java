@@ -32,7 +32,7 @@ class ResponseWorkflowDaaTest {
     @AfterEach
     void restoreConfig() throws IOException {
         if (configFile != null) Files.deleteIfExists(configFile);
-        config.load("src/main/resources/config.properties");
+        config.reload();
     }
 
     @Test

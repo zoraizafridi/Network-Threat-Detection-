@@ -18,18 +18,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/**
- * Flags one source reaching many different hosts inside a short window.
- *
- * <p>This is the east-west pattern: a single workstation touching a handful of
- * servers is normal, but one workstation touching host after host on management
- * ports is how an intruder looks for the next hop. Administrative ports are
- * counted separately from the rest so the alert can say which of the two
- * thresholds fired.</p>
- *
- * <p>Visits live in a deque per source and are pruned on every event, so the
- * memory per source is bounded by the number of hosts seen inside one window.</p>
- */
 public class LateralMovementDetector extends Detector {
 
     private record Visit(Instant at, String host, int port) {
@@ -92,8 +80,6 @@ public class LateralMovementDetector extends Detector {
             source.visits.pollFirst();
         }
         source.visits.addLast(new Visit(e.timestamp(), e.destIp(), e.port()));
-        // A repeated host adds nothing to distinctness, so the deque never needs
-        // to be longer than a small multiple of the threshold.
         while (source.visits.size() > maxHosts * 8) {
             source.visits.pollFirst();
         }
@@ -169,7 +155,6 @@ public class LateralMovementDetector extends Detector {
                         ports.add(port);
                     }
                 } catch (NumberFormatException ignored) {
-                    // A malformed entry simply drops out of the admin set.
                 }
             }
         }

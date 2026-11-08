@@ -6,4 +6,3 @@ public enum AssetType {
     ROUTER,
     IOT_DEVICE
 }
-

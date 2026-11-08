@@ -1,0 +1,61 @@
+# A container deployment with TLS terminated by Caddy.
+#
+#   docker compose up --build
+#   open https://localhost:8443
+#
+# Caddy issues a certificate from its local CA for `localhost`, so the browser
+# warns until that CA is trusted. Set NTD_HOST to a name with DNS and Caddy uses
+# ACME instead. The application listens on plain http inside the compose
+# network, which is why auth.hsts stays off in the app and the header is set by
+# the proxy.
+#
+# The packaged configuration runs in demo mode. For anything that is not a demo,
+# replace the environment block below with the commented one: the server then
+# refuses to start until every account has a real credential, and the passwords
+# come from a .env file rather than an image layer.
+services:
+  ntd:
+    build: .
+    environment:
+      PORT: "8080"
+      # JAVA_TOOL_OPTIONS: "-Dntd.persistence.enabled=true -Dntd.persistence.dir=/app/data -Dntd.app.demoMode=false"
+      # NTD_ADMIN_PASSWORD: ${NTD_ADMIN_PASSWORD:?set a real admin password}
+      # NTD_ANALYST_PASSWORD: ${NTD_ANALYST_PASSWORD:?set a real analyst password}
+      # NTD_VIEWER_PASSWORD: ${NTD_VIEWER_PASSWORD:?set a real viewer password}
+    expose:
+      - "8080"
+    volumes:
+      - ntd-data:/app/data
+      - ntd-evidence:/app/evidence
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 25s
+
+  proxy:
+    image: caddy:2-alpine
+    depends_on:
+      ntd:
+        condition: service_healthy
+    ports:
+      - "8443:443"
+    environment:
+      NTD_HOST: "localhost"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+
+volumes:
+  ntd-data:
+  ntd-evidence:
+  caddy-data:
+  caddy-config:

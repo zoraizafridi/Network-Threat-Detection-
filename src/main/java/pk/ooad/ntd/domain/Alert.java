@@ -2,6 +2,7 @@ package pk.ooad.ntd.domain;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public abstract class Alert {
     private final String id;
@@ -12,6 +13,10 @@ public abstract class Alert {
     private final String targetIp;
     private final String detectorName;
     private final String description;
+    private final AtomicInteger occurrences = new AtomicInteger(1);
+    private volatile Instant firstSeen;
+    private volatile Instant lastSeen;
+    private volatile AlertStatus status = AlertStatus.NEW;
     private boolean simulated;
 
     protected Alert(String id, Instant timestamp, Severity severity, AttackType attackType,
@@ -24,6 +29,8 @@ public abstract class Alert {
         this.targetIp = targetIp != null ? targetIp : "";
         this.detectorName = detectorName != null ? detectorName : "";
         this.description = description != null ? description : "";
+        this.firstSeen = this.timestamp;
+        this.lastSeen = this.timestamp;
     }
 
     public abstract double getRiskIncrement();
@@ -69,6 +76,54 @@ public abstract class Alert {
         return this;
     }
 
+    public int getOccurrences() {
+        return occurrences.get();
+    }
+
+    public Instant getFirstSeen() {
+        return firstSeen;
+    }
+
+    public Instant getLastSeen() {
+        return lastSeen;
+    }
+
+    public AlertStatus getStatus() {
+        return status;
+    }
+
+    public int fold(Instant at) {
+        int count = occurrences.incrementAndGet();
+        if (at != null) {
+            Instant last = lastSeen;
+            if (last == null || at.isAfter(last)) {
+                lastSeen = at;
+            }
+            Instant first = firstSeen;
+            if (first == null || at.isBefore(first)) {
+                firstSeen = at;
+            }
+        }
+        return count;
+    }
+
+    public boolean moveTo(AlertStatus next) {
+        AlertStatus current = status;
+        if (!current.canMoveTo(next)) {
+            return false;
+        }
+        status = next;
+        return true;
+    }
+
+    public Alert restore(int occurrences, Instant firstSeen, Instant lastSeen, AlertStatus status) {
+        this.occurrences.set(Math.max(1, occurrences));
+        this.firstSeen = firstSeen != null ? firstSeen : timestamp;
+        this.lastSeen = lastSeen != null ? lastSeen : timestamp;
+        this.status = status != null ? status : AlertStatus.NEW;
+        return this;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -96,4 +151,3 @@ public abstract class Alert {
                 '}';
     }
 }
-

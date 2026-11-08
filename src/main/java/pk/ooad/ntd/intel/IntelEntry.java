@@ -2,14 +2,26 @@ package pk.ooad.ntd.intel;
 
 import pk.ooad.ntd.domain.Severity;
 
-/**
- * One line of a threat feed: an address or network, a label, and how serious a
- * match is.
- *
- * @param cidr     the entry as written in the feed, kept for the alert text
- * @param label    who or what the address is believed to be
- * @param severity how seriously to treat a match
- * @param source   which feed the line came from
- */
-public record IntelEntry(String cidr, String label, Severity severity, String source) {
+import java.time.Instant;
+
+public record IntelEntry(String value, String label, Severity severity, String source,
+                         IndicatorType type, String category, int confidence, Instant expiresAt) {
+
+    public IntelEntry {
+        value = value == null ? "" : value.trim();
+        label = label == null || label.isBlank() ? "unlabelled" : label.trim();
+        severity = severity == null ? Severity.HIGH : severity;
+        source = source == null || source.isBlank() ? "feed" : source;
+        type = type == null ? IndicatorType.infer(value) : type;
+        category = category == null || category.isBlank() ? "unknown" : category.trim();
+        confidence = Math.max(0, Math.min(100, confidence));
+    }
+
+    public boolean expired(Instant now) {
+        return expiresAt != null && !expiresAt.isAfter(now);
+    }
+
+    public String normalised() {
+        return value.toLowerCase(java.util.Locale.ROOT);
+    }
 }

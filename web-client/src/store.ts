@@ -14,6 +14,7 @@ interface AppState {
   incidentCount: number;
   assets: Asset[];
   links: NetLink[];
+  containedIps: string[];
   alerts: FeedAlert[];
   incidents: IncidentRow[];
   selectedId: string | null;
@@ -32,7 +33,7 @@ interface AppState {
   markSignedOut: () => void;
   applyHttpStatus: (status: number) => void;
   setSimulation: (running: boolean, autoMode: boolean, alertCount: number, incidentCount: number) => void;
-  setNetwork: (assets: Asset[], links: NetLink[], teams?: SocTeam[]) => void;
+  setNetwork: (assets: Asset[], links: NetLink[], teams?: SocTeam[], contained?: string[]) => void;
   setPlannerView: (view: AppState["plannerView"]) => void;
   pushAlert: (alert: FeedAlert) => void;
   setAlerts: (alerts: FeedAlert[]) => void;
@@ -55,6 +56,7 @@ export const useApp = create<AppState>((set) => ({
   incidentCount: 0,
   assets: [],
   links: [],
+  containedIps: [],
   alerts: [],
   incidents: [],
   selectedId: null,
@@ -81,7 +83,7 @@ export const useApp = create<AppState>((set) => ({
     }),
   setSimulation: (running, autoMode, alertCount, incidentCount) =>
     set({ running, autoMode, alertCount, incidentCount }),
-  setNetwork: (assets, links, teams) =>
+  setNetwork: (assets, links, teams, contained) =>
     set((state) => {
       const riskHistory = { ...state.riskHistory };
       for (const asset of assets) {
@@ -91,14 +93,22 @@ export const useApp = create<AppState>((set) => ({
           riskHistory[asset.id] = [...previous, asset.riskScore].slice(-40);
         }
       }
-      return { assets, links, riskHistory, teams: teams ?? state.teams };
+      return {
+        assets,
+        links,
+        riskHistory,
+        teams: teams ?? state.teams,
+        containedIps: contained ?? state.containedIps,
+      };
     }),
   setPlannerView: (plannerView) => set({ plannerView }),
   pushAlert: (alert) =>
     set((state) => {
-      const recent = state.alerts.slice(-12);
-      const duplicate = recent.some((row) => row.attackType === alert.attackType && row.sourceIp === alert.sourceIp && row.targetIp === alert.targetIp);
-      if (duplicate) return state;
+      const index = state.alerts.findIndex((row) => row.id === alert.id);
+      if (index >= 0) {
+        const alerts = state.alerts.map((row, at) => (at === index ? { ...row, ...alert } : row));
+        return { alerts };
+      }
       return {
         alerts: capAlerts([...state.alerts, alert]),
         cue: {

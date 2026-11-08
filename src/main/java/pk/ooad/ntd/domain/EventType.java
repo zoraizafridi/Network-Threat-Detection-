@@ -6,4 +6,3 @@ public enum EventType {
     REQUEST,
     DATA_TRANSFER
 }
-

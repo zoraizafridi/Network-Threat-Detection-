@@ -5,10 +5,6 @@ import pk.ooad.ntd.util.ConfigManager;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Sliding window failure counter used to slow down credential stuffing
- * without locking out an account permanently.
- */
 final class LoginThrottle {
     private static final class Window {
         private long start;
@@ -46,6 +42,15 @@ final class LoginThrottle {
         }
     }
 
+    boolean allowed(String... keys) {
+        for (String key : keys) {
+            if (!allowed(key)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     int retryAfterSeconds(String key) {
         Window window = windows.get(key);
         if (window == null) {
@@ -55,6 +60,14 @@ final class LoginThrottle {
             long remaining = windowNanos - (System.nanoTime() - window.start);
             return (int) Math.max(1L, (remaining + 999_999_999L) / 1_000_000_000L);
         }
+    }
+
+    int retryAfterSeconds(String... keys) {
+        int longest = 0;
+        for (String key : keys) {
+            longest = Math.max(longest, retryAfterSeconds(key));
+        }
+        return longest;
     }
 
     void recordFailure(String key) {
@@ -71,8 +84,20 @@ final class LoginThrottle {
         });
     }
 
+    void recordFailure(String... keys) {
+        for (String key : keys) {
+            recordFailure(key);
+        }
+    }
+
     void clear(String key) {
         windows.remove(key);
+    }
+
+    void clear(String... keys) {
+        for (String key : keys) {
+            clear(key);
+        }
     }
 
     int getMaxAttempts() {

@@ -8,24 +8,12 @@ import pk.ooad.ntd.util.ConfigManager;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * Finds periodic callbacks: the same source contacting the same destination on
- * the same port at a steady rhythm.
- *
- * <p>A single connection means nothing. A hundred connections at a fixed
- * interval with almost no jitter is the signature of an automated check-in, which
- * is why the test here is on the <em>shape</em> of the interval series rather
- * than on volume. The interval mean and variance are kept with Welford's method,
- * so the state per series is four numbers and no history list.</p>
- *
- * <p>The tracked map is capped. When it is full the series with the oldest last
- * sighting is dropped, so a scan of many tuples cannot grow memory without
- * bound.</p>
- */
 public class BeaconingDetector extends Detector {
 
     private static final class Series {
@@ -43,6 +31,7 @@ public class BeaconingDetector extends Detector {
     private final long maxIntervalMillis;
     private final int maxTracked;
     private final long cooldownMillis;
+    private final List<String> allowlist;
     private final Map<String, Series> series = new HashMap<>();
 
     public BeaconingDetector() {
@@ -57,11 +46,19 @@ public class BeaconingDetector extends Detector {
                 config.getInt("detection.beaconing.minIntervalSeconds", 5),
                 config.getInt("detection.beaconing.maxIntervalSeconds", 900),
                 config.getInt("detection.beaconing.maxTracked", 2000),
-                config.getInt("detection.beaconing.cooldownSeconds", 300));
+                config.getInt("detection.beaconing.cooldownSeconds", 300),
+                config.getList("detection.beaconing.allowlist"));
     }
 
     BeaconingDetector(String name, boolean enabled, int minSamples, double jitterTolerance,
                       int minIntervalSeconds, int maxIntervalSeconds, int maxTracked, int cooldownSeconds) {
+        this(name, enabled, minSamples, jitterTolerance, minIntervalSeconds, maxIntervalSeconds, maxTracked,
+                cooldownSeconds, List.of());
+    }
+
+    BeaconingDetector(String name, boolean enabled, int minSamples, double jitterTolerance,
+                      int minIntervalSeconds, int maxIntervalSeconds, int maxTracked, int cooldownSeconds,
+                      List<String> allowlist) {
         super(name != null ? name : "BeaconingDetector");
         this.enabled = enabled;
         this.minSamples = Math.max(3, minSamples);
@@ -70,11 +67,23 @@ public class BeaconingDetector extends Detector {
         this.maxIntervalMillis = Math.max(this.minIntervalMillis + 1000L, maxIntervalSeconds * 1000L);
         this.maxTracked = Math.max(16, maxTracked);
         this.cooldownMillis = Math.max(0, cooldownSeconds) * 1000L;
+        List<String> exempt = new ArrayList<>();
+        if (allowlist != null) {
+            for (String entry : allowlist) {
+                if (entry != null && !entry.isBlank()) {
+                    exempt.add(entry.trim());
+                }
+            }
+        }
+        this.allowlist = List.copyOf(exempt);
     }
 
     @Override
     public synchronized Optional<Alert> analyze(NetworkEvent e) {
         if (!enabled || e == null || e.timestamp() == null) {
+            return Optional.empty();
+        }
+        if (listed(allowlist, e.sourceIp()) || listed(allowlist, e.destIp())) {
             return Optional.empty();
         }
         String key = e.sourceIp() + '|' + e.destIp() + '|' + e.port();
@@ -90,8 +99,6 @@ public class BeaconingDetector extends Detector {
         if (sample.last != null) {
             long interval = Duration.between(sample.last, now).toMillis();
             if (interval < 0) {
-                // Out of order arrival: restart the series instead of feeding a
-                // negative sample into the variance.
                 sample.samples = 0;
                 sample.mean = 0;
                 sample.m2 = 0;

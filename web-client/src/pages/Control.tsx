@@ -1,8 +1,15 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { resetAttackState } from "../attackPhase";
-import { HttpStatusError, loadState, request } from "../api";
+import {
+  HttpStatusError,
+  loadContainment,
+  loadState,
+  request,
+  setContainmentMode,
+  type ContainmentBody,
+} from "../api";
 import { scenarioHalt, scenarioReset, scenarioSetLoop, scenarioStart } from "../scenario";
-import { Page } from "../components/ui";
+import { EmptyState, Page, Panel, StatusBadge } from "../components/ui";
 import { accessDenied, canControlSimulation } from "../permissions";
 import { useApp } from "../store";
 
@@ -95,9 +102,103 @@ export function ControlPage() {
   }
 
   return (
-    <Page title="Control" description="Simulation state is changed from the top bar. This page only explains the current mode.">
-      <p>{running ? "The simulation is running." : "The simulation is stopped."}</p>
-      <p>{autoMode ? "Auto mode is on. The server chooses when to emit events." : "Auto mode is off. Events run only when you start the simulation or launch an attack."}</p>
+    <Page title="Control" description="Simulation state is changed from the top bar. Containment mode is set here.">
+      <div className="stack">
+        <p>{running ? "The simulation is running." : "The simulation is stopped."}</p>
+        <p>{autoMode ? "Auto mode is on. The server chooses when to emit events." : "Auto mode is off. Events run only when you start the simulation or launch an attack."}</p>
+        <ContainmentMode />
+      </div>
     </Page>
+  );
+}
+
+type ContainmentModeName = "OFF" | "IDS" | "IPS";
+
+const MODE_HELP: Record<ContainmentModeName, string> = {
+  OFF: "Nothing is recorded and no traffic changes.",
+  IDS: "Blocks are recorded and audited, but every event is still admitted. Use this to rehearse a response.",
+  IPS: "Blocked sources stop at admission, so their events never reach a detector.",
+};
+
+function ContainmentMode() {
+  const role = useApp((state) => state.user?.role ?? "");
+  const [body, setBody] = useState<ContainmentBody | null>(null);
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setBody(await loadContainment());
+    } catch {
+      setBody(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function change(next: ContainmentModeName) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await setContainmentMode(next, password);
+      setPassword("");
+      setMessage(`Mode is now ${next}. The change is in the audit trail.`);
+      await refresh();
+    } catch (error) {
+      if (error instanceof HttpStatusError && error.status === 401) {
+        setMessage("The password was not accepted. Nothing changed.");
+      } else if (error instanceof HttpStatusError && error.status === 403) {
+        setMessage(accessDenied(role));
+      } else {
+        setMessage("The mode change failed.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const mode = body?.mode ?? "OFF";
+
+  return (
+    <Panel
+      title="Containment mode"
+      subtitle="A mode change asks for your password again, because it decides whether the system drops traffic."
+      action={body ? <StatusBadge status={mode} /> : null}
+    >
+      {!body ? <EmptyState>Containment status is not available.</EmptyState> : null}
+      <p>{MODE_HELP[mode]}</p>
+      <div className="row">
+        {(["OFF", "IDS", "IPS"] as ContainmentModeName[]).map((option) => (
+          <button
+            key={option}
+            type="button"
+            className={option === mode ? "primary" : "secondary"}
+            disabled={busy || option === mode}
+            onClick={() => void change(option)}
+          >
+            {option}
+          </button>
+        ))}
+        <input
+          aria-label="Password"
+          type="password"
+          autoComplete="current-password"
+          placeholder="Password to confirm"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+      </div>
+      {message ? <p className="muted">{message}</p> : null}
+      {body ? (
+        <p className="muted">
+          {body.blocked.length} contained, {body.droppedEvents} events dropped, {body.automaticActions} automatic. The
+          guards refused {body.refusedActions}: {body.safeguards.refusedAllowlist} allowlisted,{" "}
+          {body.safeguards.refusedRateLimit} rate limited, {body.safeguards.refusedPartition} would split the network.
+        </p>
+      ) : null}
+    </Panel>
   );
 }

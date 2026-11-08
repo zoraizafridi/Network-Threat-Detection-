@@ -41,9 +41,6 @@ public abstract class User {
         if (passwordHash.startsWith(PBKDF2_PREFIX)) {
             return checkPbkdf2(raw, passwordHash);
         }
-        if (passwordHash.equals(raw)) {
-            return true;
-        }
         if (passwordHash.contains("$")) {
             String[] parts = passwordHash.split("\\$");
             if (parts.length == 2) {
@@ -52,7 +49,12 @@ public abstract class User {
                 return parts[2].equalsIgnoreCase(sha256(parts[1] + raw));
             }
         }
-        return passwordHash.equalsIgnoreCase(sha256(raw));
+        if (passwordHash.matches("[0-9a-fA-F]{64}")) {
+            return MessageDigest.isEqual(passwordHash.toLowerCase().getBytes(StandardCharsets.UTF_8),
+                    sha256(raw).getBytes(StandardCharsets.UTF_8));
+        }
+        return MessageDigest.isEqual(passwordHash.getBytes(StandardCharsets.UTF_8),
+                raw.getBytes(StandardCharsets.UTF_8));
     }
 
     public boolean usesLegacyHash() {
@@ -149,4 +151,3 @@ public abstract class User {
                 '}';
     }
 }
-

@@ -146,4 +146,3 @@ public class Network {
         return Collections.unmodifiableList(links);
     }
 }
-

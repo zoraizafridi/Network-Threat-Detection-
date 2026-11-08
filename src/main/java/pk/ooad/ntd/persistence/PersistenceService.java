@@ -1,6 +1,7 @@
 package pk.ooad.ntd.persistence;
 
 import pk.ooad.ntd.detection.AlertListener;
+import pk.ooad.ntd.detection.AlertUpdateListener;
 import pk.ooad.ntd.domain.Alert;
 import pk.ooad.ntd.flows.FlowRecord;
 import pk.ooad.ntd.util.ConfigManager;
@@ -17,30 +18,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Keeps closed flows and raised alerts on disk.
- *
- * <p>The service sits between the live producers and SQLite: producers hand it
- * a record and get an immediate answer, while two write-behind queues batch the
- * rows onto a daemon worker. Nothing here is on the detection critical path, and
- * a store that refuses to open degrades to {@code disabled} with one error in the
- * event log rather than stopping the detector.</p>
- *
- * <p>An hourly-by-default sweeper deletes rows older than
- * {@code persistence.retentionMinutes}. It is the same cutoff the in-memory flow
- * ring uses in spirit, only measured in hours rather than minutes.</p>
- */
-public final class PersistenceService implements AlertListener, AutoCloseable {
+public final class PersistenceService implements AlertListener, AlertUpdateListener, AutoCloseable {
 
-    private final PersistenceSettings settings;
+    public static final int MIN_RETENTION_MINUTES = 5;
+    public static final int MAX_RETENTION_MINUTES = 525_600;
+
+    private volatile PersistenceSettings settings;
     private final Database database;
     private final FlowRepository flows;
     private final AlertRepository alerts;
+    private final Stores stores;
     private final WriteBehindQueue<FlowRecord> flowQueue;
     private final WriteBehindQueue<AlertRecord> alertQueue;
     private final ScheduledExecutorService sweeper;
     private final AtomicInteger lastSwept = new AtomicInteger();
     private final AtomicBoolean sweepFaultLogged = new AtomicBoolean();
+    private final AtomicBoolean inlineFaultLogged = new AtomicBoolean();
 
     public PersistenceService() {
         this(PersistenceSettings.from(ConfigManager.getInstance()));
@@ -54,25 +47,27 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
                 opened = new Database(wanted.databasePath());
             } catch (SQLException | RuntimeException ex) {
                 EventLog.getInstance().log(LogLevel.ERROR, "persistence",
-                        "Durable store unavailable at " + wanted.databasePath() + "; continuing without it (" + ex + ")");
+                        "Durable store unavailable at " + wanted.databasePath() + "; continuing in memory (" + ex + ")");
             }
         }
         this.settings = opened == null ? wanted.withEnabled(false) : wanted;
         this.database = opened;
+        int memoryRows = Math.max(256, wanted.queueCapacity());
         if (opened == null) {
-            this.flows = null;
-            this.alerts = null;
+            this.flows = new InMemoryFlowRepository(memoryRows);
+            this.alerts = new InMemoryAlertRepository(memoryRows);
+            this.stores = Stores.memory(memoryRows);
             this.flowQueue = null;
             this.alertQueue = null;
-            this.sweeper = null;
-            return;
+        } else {
+            this.flows = new SqliteFlowRepository(opened);
+            this.alerts = new SqliteAlertRepository(opened);
+            this.stores = Stores.sqlite(opened);
+            this.flowQueue = new WriteBehindQueue<>("flow", settings.queueCapacity(), settings.batchSize(),
+                    settings.flushIntervalMillis(), flows::insertBatch);
+            this.alertQueue = new WriteBehindQueue<>("alert", settings.queueCapacity(), settings.batchSize(),
+                    settings.flushIntervalMillis(), alerts::insertBatch);
         }
-        this.flows = new FlowRepository(opened);
-        this.alerts = new AlertRepository(opened);
-        this.flowQueue = new WriteBehindQueue<>("flow", settings.queueCapacity(), settings.batchSize(),
-                settings.flushIntervalMillis(), flows::insertBatch);
-        this.alertQueue = new WriteBehindQueue<>("alert", settings.queueCapacity(), settings.batchSize(),
-                settings.flushIntervalMillis(), alerts::insertBatch);
         this.sweeper = Executors.newSingleThreadScheduledExecutor(task -> {
             Thread thread = new Thread(task, "persistence-sweeper");
             thread.setDaemon(true);
@@ -86,28 +81,65 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
         return database != null;
     }
 
+    public int schemaVersion() {
+        if (database == null) {
+            return 0;
+        }
+        try {
+            return database.schemaVersion();
+        } catch (SQLException ex) {
+            return -1;
+        }
+    }
+
     public PersistenceSettings settings() {
         return settings;
     }
 
-    /** Never blocks: the record is queued, or counted as dropped when full. */
+    public int setRetentionMinutes(int minutes) {
+        if (minutes < MIN_RETENTION_MINUTES || minutes > MAX_RETENTION_MINUTES) {
+            throw new IllegalArgumentException("retention must be between "
+                    + MIN_RETENTION_MINUTES + " and " + MAX_RETENTION_MINUTES + " minutes");
+        }
+        int previous = settings.retentionMinutes();
+        settings = settings.withRetentionMinutes(minutes);
+        EventLog.getInstance().log(LogLevel.INFO, "persistence",
+                "retention changed from " + previous + " to " + minutes + " minutes");
+        return previous;
+    }
+
     public void recordFlow(FlowRecord record) {
+        if (record == null) {
+            return;
+        }
         if (flowQueue != null) {
             flowQueue.offer(record);
+        } else {
+            writeThrough(flows, record);
         }
     }
 
     @Override
     public void onAlert(Alert alert) {
-        if (alertQueue != null && alert != null) {
-            alertQueue.offer(toRecord(alert));
+        if (alert == null) {
+            return;
+        }
+        AlertRecord row = toRecord(alert);
+        if (alertQueue != null) {
+            alertQueue.offer(row);
+        } else {
+            writeThrough(alerts, row);
         }
     }
 
-    /** Stored flows, newest first. */
+    @Override
+    public void onAlertUpdate(Alert alert) {
+        onAlert(alert);
+    }
+
     public List<FlowRecord> storedFlows(int limit) {
-        if (flows == null) {
-            throw new PersistenceException("The durable store is disabled", null);
+        if (!isEnabled()) {
+            throw disabled("flows");
         }
         try {
             return flows.recent(limit);
@@ -116,10 +148,9 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
         }
     }
 
-    /** Stored alerts, newest first. */
     public List<AlertRecord> storedAlerts(int limit) {
-        if (alerts == null) {
-            throw new PersistenceException("The durable store is disabled", null);
+        if (!isEnabled()) {
+            throw disabled("alerts");
         }
         try {
             return alerts.recent(limit);
@@ -128,15 +159,66 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
         }
     }
 
-    /**
-     * Bulk insert for the offline importer. This one is synchronous on purpose:
-     * an import is a batch job that reports how many rows it stored, not a live
-     * producer that should be buffered.
-     *
-     * @return how many rows were written
-     */
+    private PersistenceException disabled(String what) {
+        return new PersistenceException("The durable store is disabled; set persistence.enabled=true to read stored "
+                + what, null);
+    }
+
+    public void recordIncident(IncidentRecord record) {
+        writeThrough(stores.incidents, record);
+    }
+
+    public List<IncidentRecord> storedIncidents(int limit) {
+        return read("incidents", stores.incidents, limit);
+    }
+
+    public void recordContainment(ContainmentRecord record) {
+        writeThrough(stores.containment, record);
+    }
+
+    public List<ContainmentRecord> storedContainment(int limit) {
+        return read("containment actions", stores.containment, limit);
+    }
+
+    public void recordAudit(AuditRecord record) {
+        writeThrough(stores.audit, record);
+    }
+
+    public List<AuditRecord> storedAudit(int limit) {
+        return read("audit entries", stores.audit, limit);
+    }
+
+    public void recordNotification(NotificationRecord record) {
+        writeThrough(stores.notifications, record);
+    }
+
+    public List<NotificationRecord> storedNotifications(int limit) {
+        return read("notifications", stores.notifications, limit);
+    }
+
+    public void recordManifest(ManifestRecord record) {
+        writeThrough(stores.manifests, record);
+    }
+
+    public List<ManifestRecord> storedManifests(int limit) {
+        return read("evidence manifests", stores.manifests, limit);
+    }
+
+    public void recordModelSummary(ModelSummaryRecord record) {
+        writeThrough(stores.models, record);
+    }
+
+    public ModelSummaryRecord lastModelSummary() {
+        List<ModelSummaryRecord> rows = storedModelSummaries(1);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    public List<ModelSummaryRecord> storedModelSummaries(int limit) {
+        return read("the model summary", stores.models, limit);
+    }
+
     public int importFlows(List<FlowRecord> records) {
-        if (flows == null) {
+        if (!isEnabled()) {
             throw new PersistenceException(
                     "The durable store is disabled; set persistence.enabled=true to import flows", null);
         }
@@ -157,9 +239,8 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
         return written;
     }
 
-    /** Bulk insert for imported alerts, used by the evidence importer. */
     public int importAlerts(List<AlertRecord> records) {
-        if (alerts == null) {
+        if (!isEnabled()) {
             throw new PersistenceException(
                     "The durable store is disabled; set persistence.enabled=true to import alerts", null);
         }
@@ -175,10 +256,7 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
     }
 
     public PersistenceStatus status() {
-        if (database == null) {
-            return PersistenceStatus.off(settings.databasePath().toString());
-        }
-        String error = worst(flowQueue.lastError(), alertQueue.lastError());
+        String error = worst(named(flowQueue), named(alertQueue));
         int flowRows = 0;
         int alertRows = 0;
         try {
@@ -186,6 +264,10 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
             alertRows = alerts.count();
         } catch (SQLException ex) {
             error = worst(error, "Cannot count rows: " + ex);
+        }
+        if (flowQueue == null) {
+            return new PersistenceStatus(false, settings.databasePath().toString(), flowRows, alertRows,
+                    0, 0, 0, 0, null, error);
         }
         Instant lastFlush = latest(flowQueue.lastFlush(), alertQueue.lastFlush());
         return new PersistenceStatus(true, database.file().toString(), flowRows, alertRows,
@@ -196,7 +278,6 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
                 error);
     }
 
-    /** Deletes rows past the retention cutoff and reports how many went. */
     public int sweepNow() {
         if (database == null) {
             return 0;
@@ -206,6 +287,12 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
         try {
             deleted += flows.deleteBefore(cutoff);
             deleted += alerts.deleteBefore(cutoff);
+            deleted += stores.incidents.deleteBefore(cutoff);
+            deleted += stores.containment.deleteBefore(cutoff);
+            deleted += stores.audit.deleteBefore(cutoff);
+            deleted += stores.notifications.deleteBefore(cutoff);
+            deleted += stores.manifests.deleteBefore(cutoff);
+            deleted += stores.models.deleteBefore(cutoff);
             lastSwept.set(deleted);
         } catch (SQLException ex) {
             if (sweepFaultLogged.compareAndSet(false, true)) {
@@ -219,9 +306,8 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
         return lastSwept.get();
     }
 
-    /** @return true when both queues drained inside the budget */
     public boolean flush(long timeoutMillis) {
-        if (database == null) {
+        if (flowQueue == null) {
             return true;
         }
         long half = Math.max(1, timeoutMillis / 2);
@@ -232,23 +318,22 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
 
     @Override
     public void close() {
-        if (database == null) {
-            return;
+        sweeper.shutdownNow();
+        if (flowQueue != null) {
+            flowQueue.close();
         }
-        if (sweeper != null) {
-            sweeper.shutdownNow();
+        if (alertQueue != null) {
+            alertQueue.close();
         }
-        flowQueue.close();
-        alertQueue.close();
-        database.close();
+        if (database != null) {
+            database.close();
+        }
     }
 
     private void sweepQuietly() {
         try {
             sweepNow();
         } catch (RuntimeException ex) {
-            // A throwing task would silently cancel the schedule, so the outer
-            // catch matters even though sweepNow already guards SQL.
             if (sweepFaultLogged.compareAndSet(false, true)) {
                 EventLog.getInstance().log(LogLevel.WARN, "persistence", "Retention sweep crashed (" + ex + ")");
             }
@@ -257,6 +342,32 @@ public final class PersistenceService implements AlertListener, AutoCloseable {
 
     private static AlertRecord toRecord(Alert alert) {
         return AlertRecord.from(alert);
+    }
+
+    private <T> void writeThrough(RecordStore<T> store, T row) {
+        if (row == null) {
+            return;
+        }
+        try {
+            store.insertBatch(List.of(row));
+        } catch (SQLException ex) {
+            if (inlineFaultLogged.compareAndSet(false, true)) {
+                EventLog.getInstance().log(LogLevel.WARN, "persistence",
+                        "Could not write a row outside the queues (" + ex + ")");
+            }
+        }
+    }
+
+    private static <T> List<T> read(String what, RecordStore<T> store, int limit) {
+        try {
+            return store.recent(limit);
+        } catch (SQLException ex) {
+            throw new PersistenceException("Cannot read stored " + what, ex);
+        }
+    }
+
+    private static String named(WriteBehindQueue<?> queue) {
+        return queue == null ? null : queue.lastError();
     }
 
     private static Instant latest(Instant left, Instant right) {

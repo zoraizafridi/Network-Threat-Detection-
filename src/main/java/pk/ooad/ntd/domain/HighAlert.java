@@ -14,4 +14,3 @@ public class HighAlert extends Alert {
         return 20.0;
     }
 }
-

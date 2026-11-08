@@ -51,8 +51,10 @@ export function StatusBadge({ status }: { status: string }) {
     key.includes("CRIT") || key === "COMPROMISED" || key === "HIGH"
       ? "critical"
       : key.includes("SUSPIC") || key === "WARN" || key === "DEGRADED" || key === "OPEN"
+        || key === "ACKNOWLEDGED" || key === "INVESTIGATING"
         ? "warn"
         : key === "NORMAL" || key === "LOW" || key === "HEALTHY" || key === "CLOSED" || key === "MITIGATED"
+          || key === "RESOLVED" || key === "FALSE_POSITIVE"
           ? "ok"
           : "isolated";
   const label = statusLabel(status);

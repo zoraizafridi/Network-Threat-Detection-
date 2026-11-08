@@ -312,3 +312,641 @@ Verification after the clean: `mvn -o -B test` 229 tests and 0 failures in 41 cl
 `mvn -o -B package` BUILD SUCCESS, `npm test -- --run` 65 tests in 15 files. No behaviour changed:
 the removals are comments and files that no code path reads.
 
+## Step 0: completion prompt audit
+
+`docs/completion-audit.md` checks all 74 numbered items of the completion prompt against the
+code before anything is built, as its Step 0 requires. Result: 2 exist, 20 are partial and 52
+are missing. The full five-pattern model, the pinned enums and the dependency rule stay as they
+are; the missing work is additive.
+
+Baseline recorded from a clean `target/`: 229 Java tests in 41 classes and 65 web tests in 15
+files, all passing. Version control remains the owner's step, so each phase that follows is
+recorded here rather than in a commit.
+
+## Completion phase 1: persistence
+
+Audit rows 1.1 to 1.6.
+
+- `AlertRepository` and `FlowRepository` are now interfaces over `RecordStore`, with a SQLite
+  implementation (`SqliteAlertRepository`, `SqliteFlowRepository`) and an in-memory one
+  (`InMemoryAlertRepository`, `InMemoryFlowRepository`). `PersistenceService` holds the interface
+  and never tests for null, so a store that is off is a different implementation, not a
+  different code path. The two legacy repositories' hand written SQL moved into `TableSpecs`,
+  which is now the only place that knows a column order.
+- Schema v2 adds `incidents`, `containment_actions`, `audit_entries`, `notifications`,
+  `evidence_manifests` and `ml_model`, plus `occurrences`, `first_seen_ms`, `last_seen_ms` and
+  `status` on `alerts`. `Database.migrate` runs one step per version, writes `user_version` after
+  the last step, guards the `ALTER TABLE` steps with a column check, and refuses a file written by
+  a newer build with a message that names both versions.
+- Write paths for the new tables: incidents report every change, containment reports a block and
+  a release differently, the audit log reports each entry, a model training pass records its
+  summary, and an evidence bundle records its manifest. Each is a low volume single row write, so
+  they go straight to the store rather than through a queue and report one warning if the store
+  refuses them.
+- Restore on start: `IncidentResponseFacade.restore()` reads the alert ring, incidents with the
+  alerts whose rows still exist, unexpired blocks, the audit trail and the last model summary, and
+  returns a `RestoreReport` whose `summary()` line the launcher prints. `AlertRecord.toAlert()`
+  rebuilds a live alert with its original id; a row that cannot be rebuilt is skipped rather than
+  failing the start. The stream ring is filled by `StreamBroadcaster.seed`, which emits nothing.
+- `GET /api/persistence/status` gained `schemaVersion` and is now built field by field so the
+  shape is explicit. `GET /api/flows/history` no longer answers 503 when the store is off: the
+  service keeps flows in memory in that mode, so an empty list really means nothing was recorded.
+
+Verified by hand on a real file: a fresh database came up at `user_version=2` with all eight
+tables and 1693 imported flows, and a hand built v1 file with one legacy alert came back at
+version 2 with the row intact and `occurrences=1`, `status=NEW` filled in by the defaults.
+
+## Completion phase 3: import and replay
+
+Audit rows 3.1 to 3.6. Row 3.7 waits for the batched test pass because its assertion needs the
+allowlist from phase 5.
+
+- `DetectionEngine.process` became `public void processNow(NetworkEvent)`. The worker loop calls
+the same method, so replay and live traffic share one path. Exposing it is what makes replay
+exact: the importer hands over one event, waits for the detectors to finish, reads how many
+alerts that event raised, and only then offers the next one. Pushing onto the shared queue would
+have raced the worker and left every alert of unknown parentage.
+- New package `imports`. `ImportService` parses a conn log through the existing
+`ZeekConnLogParser`, turns each `FlowRecord` into a `NetworkEvent`, and replays it. `ImportLabels`
+reads the evaluation file: a `uid,label` table with a header, quoted cells, comment lines, and a
+report for short rows and duplicates. Labels are looked up after the run and never reach a
+detector or an alert.
+- The flow to event mapping is a written rule: bytes above zero become `DATA_TRANSFER` with those
+bytes, otherwise `CONNECT` with none; a `conn_state` in `import.failureStates` (`S0`, `REJ`,
+`RSTO`, `RSTR`) sets `success=false`; the timestamp is the connection start; the payload is
+empty and the event is marked not simulated. A refused connection is therefore a failed connect
+and never a failed login, so a capture without logins cannot make the brute force detector fire.
+- Unknown addresses become `WORKSTATION` assets named `import-<ip>`, capped by
+`import.unknownHosts.max` and listed in the report. `reset()` removes exactly the assets the
+importer added, so a simulation reset restores the shipped topology. A replay normally leaves
+them behind on purpose: the alerts it raised point at them.
+- One copy of each connection, never two. If the export rows were stored, `FlowRecorder` is paused
+for the length of the run through the new `setRecording`; if the store is off, the recorder keeps
+its own history from the replayed events. Either way the flows page shows one row per connection.
+- Pace is a clock multiplier: `0` replays as fast as the pipeline accepts, `1` follows the
+recorded timing, `60` runs a minute of capture per second, and any single gap is compressed to
+`import.replay.maxGapMillis` so an overnight pause does not stall a result.
+- Entry points: `--replay-zeek <log> [--labels <csv>] [--speed N]` in `Main`, which prints the
+summary and the per-label table; `POST /api/import/zeek`, `GET /api/import/status` and
+`GET /api/import/sample`, all three in the `API_PATHS` allowlist; and a new portal page with two
+drop zones, a pace select, a progress bar, four stat tiles and the per-label table. The start
+route is limited to roles that control the simulation, caps the body at `import.request.maxBytes`
+and answers 409 while a replay is running. The completion listener writes one audit entry.
+- Client: `loadImportStatus`, `loadImportSample` and `startImport` in `api.ts`, a lazy `import`
+route in `App.tsx`, a nav entry under Operations with its own icon, and the `.import-*` styles.
+The page polls every 1.5 s and reloads the map and the alert feed once per new report, because a
+replay adds hosts and raises alerts while the page is only watching numbers.
+
+Verified with the bundled capture, 1693 connections and 1693 events: 142 alerts, 37 hosts added,
+nothing stored with the store off, 493 ms at speed 0. Per label: NORMAL 1248 flows and 127
+alerts, DOS_FLOOD 300 and 0, PORT_SCAN 40 and 3, NTP_HEALTH 30 and 0, BEACONING 25 and 0,
+BRUTE_FORCE 20 and 1, LATERAL_MOVEMENT 16 and 3, DATA_EXFIL 8 and 7, NORMAL_TYPO 5 and 0,
+NORMAL_BACKUP 1 and 1. Two readings there are expected and are addressed later: the beaconing
+and exfiltration detectors ship disabled (`detection.beaconing.enabled` and
+`detection.exfil.enabled` are false), and the 127 NORMAL alerts are the per-source volume z-score
+in `AnomalyDetector`, which phase 6 has to fold and rate limit.
+
+## Completion phase 6: alert quality
+
+A repeat used to be dropped. It is now folded, which is a different thing: the operator keeps one
+row, and that row says how often the fact recurred and when it was last seen.
+
+- `AlertGate` keeps its one method, `allow(Alert)`, because a test pins that contract and a
+gate that stops answering a boolean would break every caller. The richer answer is an opt-in
+`decide(Alert)` that returns a `Decision` of `DELIVERED`, `FOLDED` or `SUPPRESSED` plus the alert
+it folded into and a reason. The default implementation of `decide` delegates to `allow`, so a
+gate written before this phase behaves exactly as it did.
+- `Alert` gained `occurrences`, `firstSeen`, `lastSeen` and `status`. Nothing else about it changed:
+the identity, severity, addresses, detector name and timestamp are still final. `fold(Instant)`
+adds an occurrence and moves the last sighting; `restore(...)` lets the store rebuild the counters
+without a second constructor.
+- `AlertQualityGate` runs the floor, then the operator rules, then folding, then the storm cap, and
+counts each outcome separately. The dedupe window is measured from the last sighting rather than
+from the first, so a scan that keeps going keeps folding into the same row instead of starting a
+new one every minute.
+- The engine calls `decide`, and on a fold it increments the earlier alert and publishes an
+*update* through the new `AlertUpdateListener` seam on `AlertBus`. The feed replaces the row by id
+instead of appending a second copy, and `PersistenceService` re-upserts the same row, so the
+counters survive a restart without a second event.
+- `POST /api/alerts/{id}/status` moves an alert through an explicit table (`NEW` to
+`ACKNOWLEDGED`, `INVESTIGATING`, `RESOLVED` or `FALSE_POSITIVE`, any of those back to `NEW`). A
+move outside the table answers 409 with the status the alert stayed at; an unknown id answers 404.
+Every move is audited with the before and after state. `AlertRegistry` is the bounded live index
+that answers the lookup, so triage does not depend on the web ring still holding the alert.
+- A `FALSE_POSITIVE` answers with the rule it would take to silence that route. Proposing is
+automatic; creating the rule is a second, separately audited `POST /api/suppression/rules`, because
+"this alert was wrong" and "stop showing me these" are two decisions.
+- `SuppressionRules` keeps a JSON table at `config/suppression-rules.json`. A blank field is a
+wildcard and `maxSeverity` is a ceiling, so a rule written from a LOW false positive cannot silence
+a CRITICAL on the same route. A rule that names nothing is refused instead of matching everything.
+`GET|POST /api/suppression/rules` and `DELETE /api/suppression/rules/{id}` manage it; the Admin
+page lists, adds and removes rows, and the Alerts page offers the proposed rule after a false
+positive.
+- The storm cap is `alerts.maxPerMinute`, a sliding minute over *alert* timestamps rather than wall
+clock, so a replay at speed 0 meets the same limit as a live feed at real speed. It counts deliveries
+only: a fold is free, because it costs the operator nothing to read. `0` means no cap.
+- `GET /api/alert-quality` now reports detected, delivered, ratio, folded, suppressed split by
+floor, rule and storm, the window, the severity floor, the cap and the rule count. The Overview page
+renders it as one line under the header, and the import report grew `detected` and `folded` so a
+replay says both numbers instead of one that moved for reasons the reader cannot see.
+- Client: `pushAlert` replaces by id and only cues for an id it has not seen, which is what makes a
+fold look like a counter rather than a new alert. `foldLabel` renders "x23". The Alerts page got a
+Count column, a status badge and a move select, and the routing allowlist grew `/api/alerts/` and
+`/api/suppression/rules/` as validated prefixes, since a path with an id cannot be listed literally.
+
+Verified on the bundled capture, 1693 flows and 1693 events: 173 detected, 134 delivered, 39
+folded, 37 hosts added, 0 rows stored, 352 ms at speed 0. Eight of the folds are visible in the
+per-label table, where port scan goes from 3 to 1, lateral movement from 3 to 1 and exfiltration from
+7 to 3; the rest are the volume anomaly repeating against the same route. The 127 NORMAL rows that
+remain are different sources crossing the same z-score, which is a fact per source rather than a
+repeat, so folding is right to leave them alone. The gate reports raw 173, delivered 134, folded 39,
+suppressed 0 on the same run.
+
+## Completion phase 7: correlation and search
+
+Correlation could already say "this source raised two kinds of attack". It can now say which ordered
+campaign ran, and the operator can read the sequence that led to an escalation instead of a count.
+
+- `KillChainRules` holds ordered stages per chain in `config/kill-chain.json`. A chain names an id, a
+name, two or more `AttackType` stages, a window measured from the first stage, a severity and a note.
+The file is optional: with no file the built-in `recon-to-exfil` chain (port scan, then brute force,
+then data transfer, 900 s, CRITICAL) is used, so the capability works on a fresh checkout. A file
+that exists but cannot be read, names a stage that is not in the enum, or holds a chain with fewer
+than two stages is reported through `chainProblem` and the built-in chain stays in force. A broken
+rule file must not silently switch correlation off, and an unknown stage is refused rather than
+mapped onto something else.
+- `SiemCorrelator` walks every chain one stage forward per alert, per source. The stage index only
+moves forward, and a stage that arrives out of order or after the chain window has run out does not
+match: the progress is dropped and the alert may only start the chain again from stage zero. That is
+why a source that guesses credentials and then scans has not run this chain. A completed chain is
+published once as `Possible compromise: ...` at the chain's severity, with the source, the stage path,
+the window and the target, and the existing distinct-type rule is skipped for that alert so one fact
+is not two escalations. The status now reports `chains`, `chainsMatched`, `lastChain` and
+`chainProblem`.
+- The correlation result is a normal alert, so it lands in the record, the ring, the store and every
+search with no extra plumbing. Its detector name is the correlator's own, which is also how the
+incident timeline tells an escalation apart from an alert.
+- `GET /api/incidents/{id}` answers one incident with a derived timeline. Each entry carries the time,
+a kind (`alert` or `escalation`), a title, the detail, the severity, the detector, the attack type, the
+route, the alert id, the occurrence count and the origin. The timeline is derived rather than stored:
+an incident is a grouping of alerts, so a second table would be a copy that can drift. An unknown id
+answers 404.
+- `GET /api/events` is the search. An event here is a detected alert, because that is the fact this
+system records with a detector, a severity, a route and a status, and it is what the timeline is built
+from. Filters are free text (`q`, also accepted as `text`), severity, attack type, detector, source,
+target, origin (simulated or live) and a time range; paging is `limit` and `offset`, and the answer is
+an envelope with `total`, `offset`, `limit` and the rows. Candidates are the live ring plus the
+durable store, deduplicated by id and sorted newest first, so a search still finds history after the
+ring has moved on. A malformed filter answers 400 rather than an empty list, because an empty result
+from a broken query reads as "nothing happened".
+- The same filters were added to `/api/alerts`, whose response stays a plain array so every existing
+caller keeps working; the paged envelope lives only on `/api/events`.
+- Client: the new Events page searches with those filters, tails every three seconds, pages with
+previous and next, and shows the selected row in full. The Incidents page now selects a row instead of
+navigating away, fetches the server timeline, and offers `Focus host` as a separate action, because
+"read this incident" and "go look at that host" are two decisions. The Admin operations table gained a
+Kill chains row that reports the rule count, the match count, the last chain and any problem.
+
+The runtime check ran the attack lab from one source, spaced past the five second detector cooldown,
+against a two stage test rule file: port scan then brute force produced one CRITICAL
+`Possible compromise: Scan then credential guessing from 10.0.1.10 (PORT_SCAN then BRUTE_FORCE)
+within 900s against 10.0.1.30`, `chainsMatched` went to 1, `lastChain` named the chain, and the same
+file's deliberately broken second chain was reported as `broken names unknown stage NOT_A_STAGE`
+while the good chain stayed active. The event search found that row by text, the incident detail
+returned three timeline entries with the escalation last and marked `escalation`, and a bad `limit`
+answered 400. The built-in chain did not complete on the bundled capture, because its third stage
+needs a `DATA_TRANSFER` alert and the capture's eight exfiltration rows raise none even with
+`detection.exfil.enabled=true`, so the sequence never gets past its second stage; the two stage rule
+above is the demonstration that the file drives the behaviour.
+
+## Completion phase 8: containment
+
+- `ContainmentService` now has a `Mode` of `off`, `ids` or `ips`. The mode is read from
+  `containment.mode`, and when that key is absent or unreadable the older `containment.enabled` and
+  `containment.enforce` pair decides, so an existing configuration keeps the behaviour it asked for.
+  `off` records nothing, `ids` records actions and admits every event, and `ips` drops a contained
+  source's events. `setMode` switches at runtime and logs the change, and the recorded actions survive
+  a switch so a release list is never lost by toggling.
+- `containment.minSeverity` joins `containment.autoSeverity`; an automatic block reacts only to an
+  alert at or above the higher of the two, so the quality floor and the block threshold are separate
+  settings.
+- New `ContainmentSafeguards` holds the three guards. An address on `containment.allowlist` (exact, or
+  a prefix ending in a star) is never contained, a burst above `containment.maxPerMinute` measured over
+  one minute is refused, and a block whose removal would split the topology is refused after
+  re-planning the backbone without that host. A refused check does not consume rate budget, and a
+  topology that cannot be read while it is being written is treated as no obstacle: the block is the
+  safety action, so a busy network must not be able to veto one. Each refusal is counted by reason.
+- `GET /api/containment` reports `mode`, `minSeverity`, `refusedActions` and a `safeguards` block with
+  the allowlist, the rate limit, whether the partition check is on, and the three refusal counters.
+  `POST /api/containment/mode` takes a mode and the account password, re-authenticates through
+  `verifyPassword`, audits ALLOWED or DENIED, and answers with the new mode; a bad mode name answers
+  400, a rejected password 401, and a role without attack permission 403. Blocks and releases broadcast
+  a fresh network frame, so the overlay updates without a reload.
+- Automatic blocks now reach the planner: `containmentTasks()` turns every active automatic block into
+  a `contain-<assetId>` `MitigationTask` in both planning paths, with the asset value and type cost, so
+  the existing decay, reachability and capacity rules apply unchanged. Manual blocks are left out, as
+  they are already an operator's decision with an actor.
+- `GET /api/network` carries `contained` as `{ip, expiresAt, automatic}`. The client keeps
+  `containedIps` in the store, the Hosts table and the host panel show a Contained badge, and both the
+  3D scene and the flat map draw a dashed ring in a colour no status uses. The Control page gained a
+  mode panel that posts the password; the Admin containment panel now reports the mode.
+
+The runtime check set the mode to `ips` with a correct password, was refused with a wrong one (401),
+and refused an unknown mode name (400). With an allowlist of `10.0.9.9`, blocking that address answered
+409 `refused: address is on the containment allowlist`, and a third block in one minute answered 409
+`refused: rate limit of 2 per minute reached`. Blocking `10.0.2.1` (`ws-ops-1`) then launching a port
+scan from that host produced 16 dropped events and no alert from the source; after an explicit release
+the same attack produced one alert while the drop counter stayed at 16. `GET /api/network` listed the
+contained address and stopped listing it after release, and the audit trail recorded
+`containment.mode` as `was OFF, enforcing true`, plus the block and the release with their actors.
+
+
+## Completion phase 10: notifications
+
+`notifications` grew from one webhook into three channels with one delivery history. The console
+channel writes a delivered line to the event log. The email channel is a small SMTP client
+(`notify/SmtpMailer`) that speaks EHLO, upgrades with STARTTLS when the relay offers it, signs in
+with AUTH LOGIN when credentials are present and sends one base64 body, so dot stuffing and line
+length limits stay out of the picture. Credentials are read from `NTD_SMTP_USER` and
+`NTD_SMTP_PASSWORD`; configuration never holds them.
+
+The webhook is guarded before it is used (`notify/WebhookGuard`): a URL must be `https` unless it
+names loopback and `notifications.allowInsecure=true`, and the resolved addresses are refused when
+they are loopback, any-local, link-local, site-local, multicast or unique-local. The client is built
+with `HttpClient.Redirect.NEVER`, the body is signed with HMAC-SHA256 from `NTD_WEBHOOK_SECRET`, and
+a refused URL is counted and described synchronously instead of escaping on the alert thread.
+Delivery retries with exponential backoff, a circuit breaker opens after a threshold of failures and
+closes after its cooldown, an hourly cap limits traffic and a per-source-per-type cooldown stops a
+storm from repeating the same alert. A bounded `Delivery` history keeps the last attempts, and the
+summary is redacted and truncated before it leaves the process.
+
+`GET /api/notifications` now returns the channel health, the effective limits and the delivery
+history next to the outbox. `POST /api/notifications/test` probes every configured channel and
+reports each outcome; `POST /api/notifications/control` turns delivery on or off with a password
+re-entry. Both are Admin only and audited, and every attempt on a remote channel is audited as
+`notification.email` or `notification.webhook`. The Admin page gained the
+channel row, the limits, the health counters, the switch and the history table; the outbox marks
+escalations.
+
+The runtime check ran two servers. The first allowed loopback http, received a signed body
+(`sha256=...`) for a port scan, reported `console:sent,email:disabled,webhook:sent` from the test
+endpoint, refused a wrong password with 401, disabled delivery, and wrote `notification.test`,
+`notification.control` and `notification.webhook` into the audit trail. The second used
+`https://127.0.0.1/hook`, reported `refused address 127.0.0.1 for 127.0.0.1` in the status, counted
+the refusal, and answered `webhook:refused` from the test endpoint without making a call.
+
+## Completion phase 11: export, compliance and retention
+
+Records leave the process in two shapes. `GET /api/export/{kind}?format=csv|json` renders alerts,
+events, incidents or flows, and `export/ExportService` does the rendering for both. The CSV writer
+quotes a cell that holds a comma, a quote or a line break, and prefixes a cell that starts with
+`=`, `+`, `-`, `@` or a control character with an apostrophe, so a description captured from traffic
+cannot be evaluated as a formula when the file is opened. A JSON export is an envelope with the
+kind, the generation time, the count, the columns and the rows. Each response carries
+`X-Content-SHA256`, the digest of the body the client just received, plus a `Content-Disposition`
+filename, so a downloaded copy can be checked against what the server reported. Rows are capped by
+`export.maxRows` (5000) and every export is audited as `export.<kind>`.
+
+`GET /api/incidents/{id}/bundle` returns the incident detail the page already shows, with a manifest
+that records the kind, a format version, the creation time, the record count and the SHA-256 of the
+detail. The digest is repeated in `X-Manifest-SHA256`, and it is computed over the detail as
+serialized, so a receiver can re-serialize what it read and compare without trusting this process.
+An unknown id answers 404 rather than an empty bundle.
+
+`ComplianceService.controls()` maps seven ISO/IEC 27001:2022 Annex A controls to what the system can
+demonstrate: logging, monitoring, threat assessment, capacity, information deletion, data masking
+and configuration management. Each row carries a PASS, PARTIAL or FAIL status, the evidence behind
+it, and an `indicative` flag, and the summary repeats a note that this is a mapping and not a
+certification. The Admin compliance panel renders the table under the state rows.
+
+Retention stopped being read only. `POST /api/retention` takes minutes and a password re-entry from
+an Admin, validates the value between 5 minutes and one year, audits `retention.update` with the
+previous value, and optionally sweeps before answering with the new value and the row count. The
+sweep now covers the model table too, so every table the store owns is purged; previously
+`ml_model` would have outlived its window. Reports gained CSV and JSON export links for all four
+kinds, Events gained two, and Admin gained the retention form.
+
+The runtime check ran one server with the store on. It logged in, launched a port scan and ran the
+simulation briefly, then verified 54 things: the alerts JSON envelope and its digest against a hash
+recomputed in the client, the CSV header, the row count matching between the two formats, every
+field count staying aligned after parsing the CSV, the events and flow exports, the incident bundle
+digest recomputing from its own detail, 400 for an unknown kind and an unknown format, 401 without
+a session, 401 for a wrong retention password, 400 below 5 and above 525600 minutes, 403 from an
+analyst session, 200 for 60 minutes with the previous value reported, the summary reading the new
+value back with seven labelled controls, and the audit trail holding `export.alerts`, `export.flows`,
+`incident.bundle` and `retention.update`.
+
+
+## Completion phase 2: security posture
+
+`docs/security.md` is new and is now the reference for this area. It records the deployment modes,
+the account and permission matrix, the password rule, session handling, the re-entry gate for three
+routes, the login throttle, every response header with the reason for it, the audit rules, how
+secrets are supplied, the container hardening, the dependency review and the limitations that
+remain.
+
+Demo mode is explicit rather than accidental. `security/SecurityPolicy` reads `app.demoMode`, prints
+a banner at startup, and in production mode returns a list of problems that makes `Main` exit with
+status 2 before the server binds a port. The problems are a missing username, a missing credential,
+the shipped demo hash and a plaintext password that fails the policy. Credentials are read from
+`NTD_ADMIN_PASSWORD`, `NTD_ANALYST_PASSWORD` and `NTD_VIEWER_PASSWORD` first and from the file
+second. The policy is at least `auth.password.minLength` characters (12 with a floor of 8), not the
+username, not a demo password, and, with `auth.password.requireClasses`, at least one letter and one
+digit. A stored hash cannot be measured for strength and the document says so instead of pretending
+otherwise.
+
+Password verification became constant time for the hash branch and for the plaintext fallback, and
+`AuthService.verify` was added so a re-entry check cannot change the facade's current user. The three
+consequential routes, containment mode, notification control and retention, now share one gate:
+`auth.reauth.enabled` turns it on, `auth.reauth.freshSeconds` remembers a recent success, a wrong
+password answers 401, a throttled attempt answers 429 with `Retry-After`, and both are audited. The
+gate uses its own `LoginThrottle`, so a session cannot be used as a password oracle.
+
+Sign-in failures are counted twice, once as `account:<name>` and once as `address:<ip>`. The account
+key stops a guess against one name, the address key stops one client spreading guesses across many
+names, and each window expires on its own. A blocked attempt answers 429 with `Retry-After`, and an
+unknown username answers 401 with an empty body, so the response does not say whether the account
+exists. A session also has a hard lifetime now: `auth.session.absoluteTimeoutSeconds` (12 hours by
+default) is checked on every API call, and an expired session is invalidated, answered with 401 and
+audited as `auth.expired`.
+
+Responses gained `Permissions-Policy`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`
+and optional HSTS, and the body is capped by `http.maxBodyBytes` with a 413 before a handler runs. A
+mutating request whose `Origin` does not match `Host` answers 403, an unknown `/api` path answers 404
+instead of the single page app, `/healthz` answers liveness without a session, and one exception
+handler turns an unexpected failure into 500 with `{"error":"internal server error"}` while the stack
+trace goes to the event log.
+
+Audit text is flattened before it is stored: control characters become spaces and each field has a
+cap, so a username with a newline in it cannot stretch an entry over several lines. `config.read` is
+recorded for both outcomes, `import.zeek` was already recorded, and the ring writes through to
+`audit_entries` as an insert, which keeps the trail append only apart from the audited retention
+sweep.
+
+The runtime stage of the Dockerfile now installs `curl` for the health check, creates the `ntd` user
+with uid 10001, owns the data and evidence directories, switches to that user, sets the store paths
+through `JAVA_TOOL_OPTIONS` and declares `HEALTHCHECK` on `/healthz`. `deploy/Caddyfile` and
+`docker-compose.yml` add a local TLS proxy with HSTS and a health gate, and the README's Docker
+section describes both.
+
+Dependency evidence was recorded rather than assumed. `mvn dependency:tree` resolves Javalin 6.3.0,
+Jetty 11.0.23, Jackson 2.17.2, slf4j 2.0.16 with the simple binding at 2.0.13, sqlite-jdbc 3.46.1.3
+and kotlin-stdlib 1.9.25; `npm audit` reports zero vulnerabilities across 220 packages. Both are
+listed in `docs/security.md` with the commands to repeat them.
+
+The runtime check ran four servers and 63 assertions. It verified the header set, the absence of HSTS
+by default and its presence with `auth.hsts.maxAgeSeconds=600`, the public `/api/demo` payload in
+both modes, the session and CSRF cookie attributes, the session policy in `/api/config`, rejected
+retention calls without and with a wrong password, a successful one with the right password, a
+same-origin mutation accepted and a cross-origin one refused, an unknown route at 404, a 9 MiB body
+at 413, an unknown account at 401 with an empty body, the audit entries for sign in, config read and
+both retention outcomes, an injected newline kept on one line, a two second hard lifetime answering
+401 and writing `auth.expired`, three failures at 401 and the fourth at 429 while a correct password
+was also refused, the block lifting when its three second window expired, the refusal to start
+without credentials exiting 2 with all three accounts named and no listener, and a production start
+with environment passwords where the shipped password is rejected and the environment one is
+accepted.
+
+## Completion phase 9: evaluation, noise and the model input defect
+
+`ml/EvaluationService` keeps the ground truth an imported capture brings with it. `ImportService`
+already joined the label file after the fact and now hands each replayed connection to a
+`SampleSink` with its label, whether a rule alerted while it was replayed and the run id. The
+service stores those rows per run, bounded by `ml.eval.maxRuns` and `ml.eval.maxSamplesPerRun`, and
+answers two questions. `dataset()` reports the set size, the class split and the run ids. `evaluate()`
+scores every row through a `ScoreSource`, and returns a confusion matrix at the configured threshold
+with precision, recall, F1, false positive rate and accuracy, a sweep across `ml.eval.sweepStart`,
+`ml.eval.sweepEnd` and `ml.eval.sweepStep`, one row per run, and the same arithmetic for the rules
+alone over the same rows. A label listed in `ml.eval.benignLabels` is benign and any other label is
+an attack, so an unfamiliar label makes the report pessimistic rather than flattering.
+
+The model no longer learns from alerted traffic. `MlFlowScorer` subscribes to the alert bus as an
+`AlertListener`, records the `src|dst` pair behind every alert, and drops any flow whose pair was
+alerted inside `ml.train.exclusionSeconds`. The `excluded` counter is part of `/api/ml/status`, and
+the pair table is bounded by `ml.train.maxPairs` and swept on the same thread that trains, so it
+cannot grow without limit. Exclusion is the only defence against a feed that teaches the model the
+attack is the baseline, which is the common failure of unsupervised scoring on a live sensor.
+
+`POST /api/ml/evaluate` trains and then scores, and `GET /api/ml/evaluation` reads the set size.
+Both are admin only, and the POST writes `ml.evaluate` as ALLOWED or DENIED. Admin gained a model
+evaluation panel with the chosen point, the best point in the sweep, the sweep table, the per-run
+table and the rule comparison, and the model line now reports how many flows were excluded from
+training. `simulation/SimulationNoise` adds the third piece: with `sim.noise.enabled` a share of
+benign flows become a legitimate backup spike, a retry or an uncommon port, and a share of attack
+runs switch to a variant, a scan offset of 8000, a brute force against RDP or a flood on 443. The
+variants keep their `AttackType`, so `DetectorFactory.createAll()` still returns four detectors and
+the enum still holds four values, and the signature rules are expected to miss them.
+
+The runtime check is what found the real defect. The first version of the score divided the
+distance by the 95th percentile of training distances, and on the bundled capture every evaluated
+flow scored 1.0: the ratio saturates in six dimensions, so the confusion matrix was all false
+positives. The score is now the midrank of the distance in the training distribution, the share of
+training flows closer than this one, which keeps the order and stops the ceiling from swallowing the
+signal. That alone did not move the numbers, and the status showed why: the model had trained on 205
+samples while the dataset held 1693. The model was fed by the `FlowRecorder`, which closes a flow on
+the next query and has no inbound byte counter, so it learned that every reply is empty and every
+real reply then looked maximal. `ImportService` now pauses the recorder for the whole replay and
+hands the exporter records to a `FlowSink` instead, which feeds the model and, when no durable store
+kept the rows, the history. After that the model trains on 1139 flows and scores F1 0.80 at the
+default threshold with 360 true positives, 133 false positives and a false positive rate of 0.10,
+against F1 0.03 for the rules alone on the same flows. Both findings, and the fact that the training
+set is also the scoring set, are written into the README's limitations section rather than left for
+a reader to discover.
+
+The runtime check ran one server with the model and the noise turned on, imported the bundled
+capture with its labels, and verified 37 things: the simulation block in `/api/config`, an empty
+dataset before an import, the bundled capture and label files, the replay finishing and alerting, the
+dataset reading back with both classes and one run, retained samples never exceeding replayed flows,
+a viewer refused on the evaluation POST but allowed on the dataset GET, the report training before
+it scored, the sweep holding several points, the confusion matrix covering every sample, positives
+matching the attack count, precision and F1 recomputed from the counts, the best point not worse than
+the chosen one, the rule rows present, the excluded count above zero with the flows genuinely kept
+out, and the audit trail holding both the allowed and the refused evaluation.
+
+## Completion phase 4: the JSON intel feed and the indicators it matches
+
+`intel/ThreatIntel` gained a second format: a JSON array whose entries carry `type`, `value`,
+`label`, `category`, `confidence` and `expires`. `parse` dispatches on the first character, so the
+old `network label [severity]` text file still loads and the packaged `threat-intel.txt` keeps
+working. The shipped `threat-intel.json` holds 50 entries, 20 addresses, 15 domains and 15 sha256
+digests, and one of them is deliberately expired so a reload can prove that an expired row is
+counted and never matched.
+
+Matching is no longer address-only. `match(ip)` covers the source and the destination,
+`matchDomain` walks the payload against every suffix and its subdomains, `matchHash` compares a 64
+character digest case-insensitively, and `matchPayload` tries both. Severity comes from a category
+table first and from a confidence band second, so a feed author can be precise without repeating a
+severity on every row. `ThreatIntelDetector` reports the hit and, because `AttackType` stays closed
+at four values, reuses the bucket the event already implies: `LOGIN_ATTEMPT` becomes `BRUTE_FORCE`,
+`DATA_TRANSFER` stays `DATA_TRANSFER`, and connections and requests become `PORT_SCAN`.
+
+`GET /api/intel/status` reports the feed, the counts per type, the expired and skipped rows and the
+last reload. `POST /api/intel/reload` re-reads the file, is Admin only, needs password re-entry,
+audits both outcomes and leaves the previous feed in place when the new one will not load.
+`IntelService` gained a package-private constructor so a test can point it at a file it controls.
+The Admin page gained a Threat intel panel, the alerts table tags a `ThreatIntelDetector` row with
+an `IoC` chip, and AttackLab gained an Indicator contact preset that reaches a listed address, a
+listed domain and a listed digest in three events.
+
+The suite caught one defect worth recording. `IndicatorType.infer` tested the domain pattern before
+the address pattern, and `198.51.100.7` looks like four numeric labels, so a single address line
+from the text feed was stored as a domain and never matched by `match(ip)`. The patterns are now
+tried hash, IPv4, domain, with a dedicated `IPV4_PATTERN`, and `ThreatIntelTest` covers the text
+feed again. `IntelServiceTest` pins the packaged feed at 49 live entries, 19 addresses, 15 domains
+and 15 digests, and checks a subdomain hit, an uppercase digest hit and the expired row.
+
+## Completion phase 5: scenario presets, allowlists and the naming table
+
+`simulation/ScenarioService` turns the attack generators into named presets the portal and the demo
+can ask for: `port-scan`, `brute-force`, `flood`, `data-transfer`, `beaconing`, `lateral-movement`
+and `intel-contact`. Beaconing sends twelve connections about thirty seconds apart to one target
+with a little jitter on each; lateral movement sends six refused logins from one source across
+management ports 22, 445 and 3389; indicator contact sends the three listed values. `POST
+/api/scenarios` runs a preset through `DetectionEngine.processNow`, refuses a caller without the
+launch permission, audits `scenario.run`, and answers the preset title, the event count and the
+attack types it produced.
+
+The two behavioural detectors gained allowlists. `detection.beaconing.allowlist` and
+`detection.exfil.allowlist` accept a comma separated list of addresses or CIDRs, and both detectors
+test the source and the destination through the shared `Detector.listed` helper, so an internal
+backup server or a health monitor can be exempted without turning the rule off. Both keys ship
+empty and both detectors still ship disabled, so the default alert stream is unchanged.
+
+`ScenarioServiceTest` holds seven cases: the preset list, the beacon rhythm, the lateral host and
+port spread, the three indicator events, parity with the plain generators for the classic presets,
+name folding with blank defaults, and a refusal for an unknown or null preset. The README's new
+`Detector names and the type each reports` section maps every detector name, `SignatureDetector`
+through `SiemCorrelator`, to the four value attack type it reports and names the factory or the
+subscriber that wires it, which is the mapping item 5.3 asked for.
+
+## Completion phase 12: per-stage benchmarks, a soak and the metrics they explain
+
+`bench/Benchmarks` replaced the single end-to-end number with per-operation rows. It warms up at a
+tenth of the requested scale and discards that pass, then times every call over `bench.rounds`
+(five by default) and reports operations, samples, mean, p50, p95, p99, the worst sample and
+operations per second. The rows are the flow recorder, the four signature detectors, the NDR
+detectors, feature extraction, one k-means fit and the quality gate, so a regression names the stage
+instead of the whole pipeline. `--benchmark` takes an optional event count and defaults to 10000
+events.
+
+`bench/Soak` drives `DetectionEngine.processNow` from one consumer thread at
+`bench.soak.eventsPerSecond` with a queue depth capped by `bench.soak.maxQueueDepth`, and reports
+queue wait and service time as separate distributions. `--soak` takes an optional duration and runs
+the table first. The 600 second run recorded in `docs/benchmarks.md` held 2000 events per second
+with 246,611 alerts detected and 190 delivered, which also shows the gate working: the fold and the
+storm cap turned three orders of magnitude of repeats into a feed a person can read.
+
+`GET /api/metrics` returns 26 counters behind a session gate and Admin shows them in the Pipeline
+metrics row. `docs/benchmarks.md` carries the machine table, the four commands, the per-operation
+table, the soak table and the section `What the measurements found`, which names the three defects
+the measurements exposed: `AlertQualityGate.prune` walked its whole fold map on every delivery
+(105.71 us/op against 0.80 us for four detectors, now 2.96 us with a 16 entry budget),
+`FlowRecorder.evictLeastRecent` scanned the active table (now an access-order `LinkedHashMap`), and
+`EventLog.log` wrote a file per alert on the detection thread (now a bounded queue and a daemon
+writer). qa-report B.1 quotes the current table and explains the earlier 275.96 us/op gate reading
+rather than leaving a stale number in place.
+
+## Completion phase 13: the demo profile, the trace and an honest README
+
+`config/demo.properties` is the profile the demo runs under. `--config <file>` layers a properties
+file over the packaged table instead of replacing it, and `--demo` implies the demo profile unless
+`--config` names another. `--seed` fixes the simulation seed and `--trace <file>` writes the run
+record. `demo/DemoRunner` walks the facade with the queue drained on the calling thread, records
+counts, names and states only, with no timestamps, so the same seed renders the same trace on every
+run and two runs are comparable under the same profile. `Trace.write` creates parent directories.
+
+`docs/demo-script.md` carries the reference trace, what each step is showing, the profile table, a
+checklist for the walkthrough and a section on what the demo does not do. The README gained the
+pipeline description in `How an event moves`, the `Configuration` section over 205 keys with
+`docs/configuration.md` as the complete list, `Demo walkthrough`, and a `Limitations` section that
+states the data is simulated and the detectors are heuristics. The class spec was refreshed to 107
+elements with the five pattern table at line 38, so the count, the packages and the pattern list
+match the code that now exists.
+
+## Final gate: what the last run found
+
+The gate ran against the packaged jar with the demo profile: 258 Java tests in 46 classes, 65
+client tests in 15 files, `tsc --noEmit` clean, a production build, then a browser pass over every
+page on port 8097. `docs/qa-report.md` Part C is the record, `docs/completion-audit.md` carries
+the command table, and all 74 audit items now read `EXISTS`.
+
+Three defects belong here rather than only in the report, because each one is a class of mistake
+that will recur. `Database` opened two connections and then configured them; when `configure`
+threw, both handles leaked. On Windows that kept the file locked, so a corrupt database could not
+even be tidied up, and the new corrupt-file test failed in teardown rather than in its own
+assertions. The constructor now opens into locals, closes both on `SQLException` or
+`RuntimeException`, and rethrows. The Admin page grew two endpoints, `loadMlDataset` and
+`loadMetrics`, and the client test's shared mock world did not; `Promise.all` rejected, nine cases
+saw a page stuck on `Loading operations status.`, and the export they clicked was still disabled.
+A mock that mirrors the API types is part of the test, not scaffolding around it. Finally the
+containment badge rendered `Ips`, because every status string went through the word labeller; the
+two modes are now kept upper case and the operations test asserts `IPS`.
+
+## Cleanup phase: placements, the demo path removed, comments stripped
+
+The last request was to fix what the UI and the backend were still doing wrong, then clean the tree.
+The defects below came out of it, and the removals are deliberate, so the earlier phases stay
+readable as history rather than being rewritten.
+
+Placement. The sidebar, the panels and the toasts were fine on a wide screen and wrong below it.
+The top bar was the visible one: a `@media (max-width: 960px)` rule set `height: auto` so the search
+row could wrap, but a later `.shell .topbar` rule set `height: 56px` at higher specificity, so the
+second row was clipped and the account controls sat off the edge. The bar is now `min-height: 56px`
+with the wrap rules restated at the same specificity. The alert quality strip had no `grid-column`
+in a twelve-column grid, so it rendered as one twelfth of the width with its chips overflowing the
+panel; it spans `1 / -1` like the status strip and the toolbars. Wide tables now scroll inside their
+panel instead of pushing the page sideways, and cell contents are vertically centred so the count
+chips line up with their row. Below 640 px the status text, the account name and the wide popovers
+give way to a full-width menu, a full-width notification list and a full-width toast stack. The
+sidebar scrim only exists while the drawer is open and closes on navigation, because the old
+overlay stayed under the pointer and swallowed the first click on every page. The Import page drew
+an empty progress bar before a file was chosen; it now explains what the bar will track.
+
+Backend. `MlFlowScorer.reset()` nulled the model while a training pass was in flight, and the
+in-flight pass then committed the stale model over the reset, so `status()` could read `training`
+after a reset. A generation counter now stamps each training pass; a pass whose stamp is stale
+discards its result, and `reset()` bumps the counter first. `MlTest.resetDropsTheModel` is the test
+that caught it.
+
+Demo path removed. `--demo`, `--trace`, the `demo` package with `DemoRunner`, `config/demo.properties`
+and `docs/demo-script.md` are gone, together with the `--headless` stub that printed "to be built".
+`--config <file>` stays and still layers a properties file over the packaged table. The demo
+security posture is untouched: `app.demoMode`, the startup banner, `GET /api/demo` and the refusal to
+start while a shipped credential is in place all remain, because they describe deployment rather
+than the scripted run.
+
+Comments stripped. Every comment was removed from the Java sources, the TypeScript and TSX sources,
+`index.html`, the stylesheet and `pom.xml`, in all 183 files. The strip was a character scanner, not
+a regular expression, so string literals, Java text blocks and template literals survived intact.
+Two cases needed a hand fix and are worth remembering: `META-INF/*.SF` inside a Maven exclude
+started a block comment in an XML file, and the sign-in notice contained `//`, which a line-comment
+rule would have eaten. `config.properties` and `threat-intel.txt` keep their headings on purpose:
+both are formats a reader edits, and every key is documented in `docs/configuration.md`.
+
+Docs and tree. `README.md`, `docs/configuration.md`, `docs/class-spec.md` (106 elements, no demo
+package), `docs/completion-audit.md` (72 `EXISTS`, 2 `REMOVED` with the reason) and
+`docs/qa-report.md` were refreshed for the removals, including the breakpoint list that the layout
+work changed. The build output, the demo database in `data/`, the audit screenshots at the workspace
+root, the scratch directory and the 144 KB Maven bootstrap log were deleted. `.gitignore` had its
+list duplicated at the end and now states it once.
+
+
+## Fix pass (2026-11-08)
+
+- FIX 1: Added `FloodDetector` in `detection` via `DetectorFactory.createNdr()` (createAll stays at 4, createNdr now 5). Counts connection events toward one destination inside a window, any number of sources, using the event timestamp. Raises `DOS_FLOOD` at HIGH. Config keys: `detection.flood.enabled` (false), `windowSeconds`, `maxConnections`, `cooldownSeconds`, `maxTracked`, `allowlist`. Added to `config.properties` and `docs/configuration.md`.
+- FIX 1: Added `detection.anomaly.allowlist` to `AnomalyDetector` so the internal backup host can be allowlisted in the replay profile without changing thresholds.
+- FIX 1: Created `config/replay.properties` enabling beaconing, exfil, lateral and flood detectors, with allowlists for the NTP server and backup host, so all labelled attack types are detected and benign traps stay quiet.
+- FIX 1: Rewrote `ImportServiceSampleTest` assertions: at least one alert for each of `PORT_SCAN`, `BRUTE_FORCE`, `BEACONING`, `LATERAL_MOVEMENT`, `DATA_EXFIL` and `DOS_FLOOD`; no alert at all for `NTP_HEALTH`; no alert at HIGH or above for `NORMAL_TYPO` and `NORMAL_BACKUP`; flow-count and host-count assertions kept.
+- FIX 1: Extended `NdrDetectorsTest.ndrSetIsOffByDefault` to assert `createNdr().size() == 5` and added `floodDetectsDistributedVolume` covering threshold crossing, window expiry, allowlist and disabled state.
+- FIX 1: Updated README: pipeline step 4 now says nine detectors, NDR section updated to list FloodDetector, detector table row added, config key table row added, replay-zeek mention references `config/replay.properties`.
+- FIX 3: Removed self-assigned scores and grade from `docs/qa-report.md` header; replaced with a plain Status line. Removed scorecard tables from Parts A, B and C; kept all measurements, findings and evidence. Updated C.7 open items to remove stale replay-alert count claim.
+- FIX 3: `docs/completion-audit.md`: replaced "72 EXISTS" headline wording with neutral table title; updated row 3.7 evidence to match new test assertions; updated row 13.3 to remove stale line-number reference.
+- FIX 3: `README.md` Limitations section: added explicit in-sample ML F1 caveat, simulated/capture data caveat, Docker/TLS/long-run unexercised caveat.
+- FIX 4: Added `<p className="muted">In-sample: these flows were also used for training.</p>` under the model evaluation figures in `Admin.tsx`.
+- FIX 4: Added `evaluateModel` mock and `model evaluation panel shows the in-sample notice after a run` test to `tests/operations.test.tsx`.
+- UI layout: Added `@media (max-width: 1024px)` rule to collapse `board-12` to single-column on narrower viewports, fixing Import drop zone overlap at narrow widths.
+- UI layout: Fixed Incidents table layout on `/portal/incidents` with a responsive `.table-scroll` container and `.incident-table` min-width so columns are never squashed or compromised.
+- UI layout: Fixed Admin Threat Intel panel with `.table-scroll`, `.intel-table`, and separated `.intel-form` with clear margin and spacing, eliminating overlap with the password reload form.
+- UI clean: Removed "Demo mode" banner text across the portal and login page (`DemoBanner` returns null).
+- FIX 2: Regenerated `docs/class-spec.md` directly from `src/main/java` with exactly 141 elements across 23 packages, 9 detectors, 5 patterns, folded PHASE 2 TO 13 LINKS into main relationship sections, and deleted all "add these edges" wording.
+- Cleanup: Removed temporary screenshots from `target/` and rebuilt production web bundle to `src/main/resources/web`.

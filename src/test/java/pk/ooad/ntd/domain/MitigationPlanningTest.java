@@ -118,4 +118,3 @@ class MitigationPlanningTest {
         assertThrows(NullPointerException.class, () -> new ResponsePlan(backbone, null));
     }
 }
-

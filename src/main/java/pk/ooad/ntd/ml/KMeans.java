@@ -3,18 +3,6 @@ package pk.ooad.ntd.ml;
 import java.util.Arrays;
 import java.util.Random;
 
-/**
- * Lloyd's k-means over a fixed number of dimensions, initialised with k-means++.
- *
- * <p>Written here rather than pulled in as a dependency because the requirement
- * is pure Java and because a model an operator cannot inspect is a model they
- * cannot trust. Nothing is random after construction: the seed is explicit, and
- * the same seed and points produce the same centroids.</p>
- *
- * <p>An empty cluster is re-seeded at the point currently farthest from its
- * centroid. Doing nothing there would silently reduce the number of clusters,
- * which reads later like "the data had fewer shapes than it did".</p>
- */
 public final class KMeans {
 
     public record Result(double[][] centroids, int[] assignments, double inertia, int iterations) {
@@ -85,7 +73,6 @@ public final class KMeans {
         return new Result(centroids, assignments, inertia, iterations);
     }
 
-    /** Distance from a point to its nearest centroid. */
     public static double nearestDistance(double[] point, double[][] centroids) {
         double best = Double.MAX_VALUE;
         for (double[] centroid : centroids) {
@@ -115,8 +102,6 @@ public final class KMeans {
                 total += nearest[i];
             }
             if (total <= 0) {
-                // Every point is identical to a chosen centroid; spread the rest
-                // over the same points rather than dividing by zero.
                 centroids[c] = points[random.nextInt(points.length)].clone();
                 continue;
             }

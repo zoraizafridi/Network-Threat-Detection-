@@ -17,6 +17,12 @@ export interface NetLink {
   status: string;
 }
 
+export interface ContainedAddress {
+  ip: string;
+  expiresAt: string;
+  automatic: boolean;
+}
+
 export interface IncidentRow {
   id: string;
   sourceIp: string;

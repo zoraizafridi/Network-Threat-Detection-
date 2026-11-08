@@ -1,8 +1,6 @@
 export const MAP = {
   bg: 0x07100b,
   grid: 0x1b3025,
-  // The ground plate sits one step above the page background so the floor of the
-  // scene reads as a surface, while the clear colour behind it stays the page green.
   ground: 0x10251a,
   groundLine: 0xa3b8ab,
   groundRim: 0x7d9c88,
@@ -12,7 +10,7 @@ export const MAP = {
   probed: 0xf2c94c,
   compromised: 0xff6b6b,
   isolated: 0x7d8fa3,
-  // Selection is an emphasis highlight, so it uses the gold accent.
+  contained: 0x9b8cff,
   selection: 0xd9a05b,
 } as const;
 

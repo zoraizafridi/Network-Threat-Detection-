@@ -9,20 +9,8 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.function.Consumer;
 
-/**
- * A bounded record of who did what.
- *
- * <p>Detection data answers "what happened on the network". This log answers
- * "who asked for it", which is the question an incident review asks next:
- * logins, refused logins, authorisation denials, simulation control, exports and
- * containment orders all land here with the acting account.</p>
- *
- * <p>The ring is capped by {@code audit.maxRecords}; the oldest entry is dropped
- * rather than letting a long running server grow without bound. Entries also go
- * to {@link EventLog} so an operator watching the log sees security events in
- * order with everything else.</p>
- */
 public final class AuditLog {
 
     public enum Outcome {
@@ -38,6 +26,7 @@ public final class AuditLog {
     private final boolean enabled;
     private final int maxRecords;
     private final Deque<Entry> entries = new ArrayDeque<>();
+    private Consumer<Entry> recorder = entry -> { };
     private long sequence;
     private long denied;
     private long failed;
@@ -56,15 +45,14 @@ public final class AuditLog {
         this.maxRecords = Math.max(1, maxRecords);
     }
 
-    /** Records one attempt. A null actor means "not authenticated". */
     public synchronized void record(String actor, String action, String target, Outcome outcome, String detail) {
         if (!enabled || action == null || action.isBlank()) {
             return;
         }
         Outcome resolved = outcome == null ? Outcome.ALLOWED : outcome;
-        String who = actor == null || actor.isBlank() ? "anonymous" : actor;
-        Entry entry = new Entry(++sequence, Instant.now(), who, action,
-                target == null ? "" : target, resolved.name(), detail == null ? "" : detail);
+        String who = actor == null || actor.isBlank() ? "anonymous" : clean(actor, 64);
+        Entry entry = new Entry(++sequence, Instant.now(), who, clean(action, 64),
+                clean(target, 200), resolved.name(), clean(detail, 400));
         entries.addLast(entry);
         while (entries.size() > maxRecords) {
             entries.removeFirst();
@@ -77,9 +65,48 @@ public final class AuditLog {
         LogLevel level = resolved == Outcome.ALLOWED ? LogLevel.INFO : LogLevel.WARN;
         EventLog.getInstance().log(level, "audit",
                 who + " " + action + (entry.target().isEmpty() ? "" : " " + entry.target()) + " " + resolved);
+        recorder.accept(entry);
     }
 
-    /** Newest first. */
+    private static String clean(String value, int max) {
+        if (value == null) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(Math.min(value.length(), max));
+        for (int index = 0; index < value.length() && out.length() < max; index++) {
+            char ch = value.charAt(index);
+            out.append(ch < 0x20 || ch == 0x7F ? ' ' : ch);
+        }
+        return out.toString();
+    }
+
+    public void setRecorder(Consumer<Entry> sink) {
+        this.recorder = sink == null ? entry -> { } : sink;
+    }
+
+    public synchronized void restore(List<Entry> restored) {
+        if (restored == null || restored.isEmpty()) {
+            return;
+        }
+        entries.clear();
+        sequence = 0L;
+        denied = 0L;
+        failed = 0L;
+        for (Entry entry : restored) {
+            Entry copy = new Entry(++sequence, entry.timestamp(), entry.actor(), entry.action(),
+                    entry.target(), entry.outcome(), entry.detail());
+            entries.addLast(copy);
+            while (entries.size() > maxRecords) {
+                entries.removeFirst();
+            }
+            if (Outcome.DENIED.name().equals(copy.outcome())) {
+                denied++;
+            } else if (Outcome.FAILED.name().equals(copy.outcome())) {
+                failed++;
+            }
+        }
+    }
+
     public synchronized List<Entry> recent(int limit) {
         int capped = limit <= 0 ? maxRecords : Math.min(limit, maxRecords);
         List<Entry> rows = new ArrayList<>(Math.min(capped, entries.size()));

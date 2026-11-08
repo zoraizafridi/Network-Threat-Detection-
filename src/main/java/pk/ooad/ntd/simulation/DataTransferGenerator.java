@@ -41,4 +41,3 @@ public class DataTransferGenerator extends AttackGenerator {
         return events;
     }
 }
-

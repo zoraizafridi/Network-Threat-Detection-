@@ -26,4 +26,3 @@ public class SecurityAnalyst extends User {
         return false;
     }
 }
-

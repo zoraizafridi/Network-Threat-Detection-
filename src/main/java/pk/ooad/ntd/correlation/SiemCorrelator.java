@@ -21,33 +21,24 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/**
- * Correlates alerts that share a source into one incident-level alert.
- *
- * <p>A single port scan is noise; a source that scans, then guesses credentials,
- * then floods the same subnet is a campaign. The rule states the threshold in
- * terms an analyst can check: at least {@code correlation.minSignals} distinct
- * attack types from one source inside one window. Targets are counted, not
- * required, because a campaign against one host is still a campaign.</p>
- *
- * <p>Correlated alerts are published back onto the same bus so they reach every
- * existing consumer (risk, incidents, durable store, notifications) without
- * those consumers knowing this class exists. Its own output is never fed back
- * into the correlation window.</p>
- */
 public final class SiemCorrelator implements AlertListener {
 
     public static final String DETECTOR_NAME = "SiemCorrelator";
 
     public record Status(boolean enabled, int trackedSources, long signals,
-                         long correlated, int minSignals, int windowSeconds) {
+                         long correlated, int minSignals, int windowSeconds,
+                         int chains, long chainsMatched, String lastChain, String chainProblem) {
     }
 
     private record Signal(Instant at, AttackType type, String targetIp) {
     }
 
+    private record ChainProgress(int stage, Instant startedAt) {
+    }
+
     private static final class Window {
         private final Deque<Signal> signals = new ArrayDeque<>();
+        private final Map<String, ChainProgress> chains = new HashMap<>();
         private Instant lastAlert;
     }
 
@@ -59,9 +50,12 @@ public final class SiemCorrelator implements AlertListener {
     private final int cooldownSeconds;
     private final int maxSources;
     private final Severity escalateSeverity;
+    private final KillChainRules chains;
     private final Map<String, Window> windows = new HashMap<>();
     private long signalCount;
     private long correlatedCount;
+    private long chainsMatched;
+    private String lastChain = "";
 
     public SiemCorrelator(AlertBus alertBus) {
         this(alertBus, ConfigManager.getInstance());
@@ -74,11 +68,19 @@ public final class SiemCorrelator implements AlertListener {
                 config.getInt("correlation.windowSeconds", 600),
                 config.getInt("correlation.cooldownSeconds", 600),
                 config.getInt("correlation.maxSources", 2000),
-                severity(config.getString("correlation.escalateSeverity", "HIGH")));
+                severity(config.getString("correlation.escalateSeverity", "HIGH")),
+                new KillChainRules(config));
     }
 
     SiemCorrelator(AlertBus alertBus, boolean enabled, int minSignals, int windowSeconds,
                    int cooldownSeconds, int maxSources, Severity escalateSeverity) {
+        this(alertBus, enabled, minSignals, windowSeconds, cooldownSeconds, maxSources,
+                escalateSeverity, new KillChainRules(List.of(), null));
+    }
+
+    SiemCorrelator(AlertBus alertBus, boolean enabled, int minSignals, int windowSeconds,
+                   int cooldownSeconds, int maxSources, Severity escalateSeverity,
+                   KillChainRules chains) {
         this.alertBus = Objects.requireNonNull(alertBus, "alertBus must not be null");
         this.enabled = enabled;
         this.minSignals = Math.max(2, minSignals);
@@ -86,6 +88,7 @@ public final class SiemCorrelator implements AlertListener {
         this.cooldownSeconds = Math.max(0, cooldownSeconds);
         this.maxSources = Math.max(16, maxSources);
         this.escalateSeverity = escalateSeverity == null ? Severity.HIGH : escalateSeverity;
+        this.chains = chains == null ? new KillChainRules(List.of(), null) : chains;
     }
 
     @Override
@@ -110,6 +113,21 @@ public final class SiemCorrelator implements AlertListener {
         prune(window, at);
         signalCount++;
 
+        boolean cooled = window.lastAlert != null
+                && Duration.between(window.lastAlert, at).getSeconds() < cooldownSeconds;
+        KillChainRules.Chain completed = advanceChains(window, alert.getAttackType(), at);
+        if (completed != null && !cooled) {
+            window.lastAlert = at;
+            correlatedCount++;
+            chainsMatched++;
+            lastChain = completed.name();
+            alertBus.publish(alertFactory.create(completed.severity(), alert.getAttackType(), source,
+                    alert.getTargetIp(), DETECTOR_NAME,
+                    describeChain(completed, source, alert.getTargetIp()), at)
+                    .markSimulated(alert.isSimulated()));
+            return;
+        }
+
         Set<AttackType> types = new LinkedHashSet<>();
         Set<String> targets = new LinkedHashSet<>();
         for (Signal signal : window.signals) {
@@ -121,8 +139,7 @@ public final class SiemCorrelator implements AlertListener {
         if (types.size() < minSignals) {
             return;
         }
-        if (window.lastAlert != null
-                && Duration.between(window.lastAlert, at).getSeconds() < cooldownSeconds) {
+        if (cooled) {
             return;
         }
         window.lastAlert = at;
@@ -142,13 +159,47 @@ public final class SiemCorrelator implements AlertListener {
 
     public synchronized Status status() {
         return new Status(enabled, windows.size(), signalCount, correlatedCount,
-                minSignals, windowSeconds);
+                minSignals, windowSeconds, chains.size(), chainsMatched, lastChain,
+                chains.problem());
     }
 
     public synchronized void reset() {
         windows.clear();
         signalCount = 0;
         correlatedCount = 0;
+        chainsMatched = 0;
+        lastChain = "";
+    }
+
+    private KillChainRules.Chain advanceChains(Window window, AttackType type, Instant at) {
+        KillChainRules.Chain completed = null;
+        for (KillChainRules.Chain chain : chains.rules()) {
+            ChainProgress progress = window.chains.get(chain.id());
+            if (progress != null
+                    && Duration.between(progress.startedAt(), at).getSeconds() > chain.windowSeconds()) {
+                window.chains.remove(chain.id());
+                progress = null;
+            }
+            if (progress == null) {
+                if (chain.stages().get(0) == type) {
+                    window.chains.put(chain.id(), new ChainProgress(1, at));
+                }
+                continue;
+            }
+            if (chain.stages().get(progress.stage()) != type) {
+                continue;
+            }
+            int next = progress.stage() + 1;
+            if (next >= chain.stages().size()) {
+                window.chains.remove(chain.id());
+                if (completed == null) {
+                    completed = chain;
+                }
+            } else {
+                window.chains.put(chain.id(), new ChainProgress(next, progress.startedAt()));
+            }
+        }
+        return completed;
     }
 
     private void prune(Window window, Instant newest) {
@@ -174,6 +225,12 @@ public final class SiemCorrelator implements AlertListener {
         } else {
             windows.clear();
         }
+    }
+
+    private String describeChain(KillChainRules.Chain chain, String source, String targetIp) {
+        return "Possible compromise: " + chain.name() + " from " + source
+                + " (" + chain.path() + ") within " + chain.windowSeconds() + "s against "
+                + (targetIp == null || targetIp.isBlank() ? "the network" : targetIp);
     }
 
     private String describe(String source, Set<AttackType> types, Set<String> targets) {

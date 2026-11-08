@@ -40,4 +40,3 @@ public class DosFloodGenerator extends AttackGenerator {
         return events;
     }
 }
-

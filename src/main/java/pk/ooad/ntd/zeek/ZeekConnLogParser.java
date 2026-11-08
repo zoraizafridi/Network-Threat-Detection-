@@ -17,22 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Reads a Zeek {@code conn.log} into flow records.
- *
- * <p>This is the one place in the system where every column is a measurement
- * rather than a projection: the log carries a real source port, a real protocol
- * and both byte counters, so imported flows do not need the derivation the
- * simulator feed does.</p>
- *
- * <p>The parser is driven by the {@code #fields} header rather than column
- * positions, because Zeek's default column set changes between deployments. A
- * file without a header falls back to the standard order. Lines that cannot be
- * turned into a flow are counted and described, never invented.</p>
- */
 public final class ZeekConnLogParser {
 
-    /** Fallback column order when the file has no {@code #fields} header. */
     private static final List<String> FALLBACK_FIELDS = List.of(
             "ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p", "proto", "service",
             "duration", "orig_bytes", "resp_bytes", "conn_state", "local_orig", "local_resp",
@@ -192,7 +178,6 @@ public final class ZeekConnLogParser {
         return row;
     }
 
-    /** Zeek writes the separator as an escape such as {@code \x09}. */
     private static String decodeSeparator(String raw) {
         if (raw == null || raw.isEmpty()) {
             return "\t";

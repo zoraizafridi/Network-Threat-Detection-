@@ -6,8 +6,6 @@ export default defineConfig({
   build: {
     outDir: "../src/main/resources/web",
     emptyOutDir: true,
-    // The three.js vendor chunk is 250 kB gzip and only loads with the portal
-    // topology page, so the 500 kB default warning is not actionable here.
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {

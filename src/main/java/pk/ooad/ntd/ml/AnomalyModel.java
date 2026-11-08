@@ -3,18 +3,6 @@ package pk.ooad.ntd.ml;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * An unsupervised flow model: cluster the shapes that were seen, then score a new
- * flow by how far it sits from the nearest cluster.
- *
- * <p>Two normalisations keep the score interpretable. Features are standardised
- * with the training mean and deviation, so a port in the tens of thousands does
- * not swamp a byte count in the low hundreds. The distance is then divided by the
- * 95th percentile distance of the training set itself, so a score of 1.0 means
- * "further out than 95% of everything the model learned from" and a score above
- * 1.0 is clamped. That makes the threshold a statement about the training data
- * rather than a magic number.</p>
- */
 public final class AnomalyModel {
 
     private static final double EPSILON = 1e-9;
@@ -22,13 +10,16 @@ public final class AnomalyModel {
     private final double[] mean;
     private final double[] deviation;
     private final double[][] centroids;
+    private final double[] sortedDistances;
     private final double scale;
     private final int samples;
 
-    private AnomalyModel(double[] mean, double[] deviation, double[][] centroids, double scale, int samples) {
+    private AnomalyModel(double[] mean, double[] deviation, double[][] centroids,
+                         double[] sortedDistances, double scale, int samples) {
         this.mean = mean;
         this.deviation = deviation;
         this.centroids = centroids;
+        this.sortedDistances = sortedDistances;
         this.scale = scale;
         this.samples = samples;
     }
@@ -58,8 +49,6 @@ public final class AnomalyModel {
         for (int d = 0; d < dimensions; d++) {
             deviation[d] = Math.sqrt(deviation[d] / count);
             if (deviation[d] < EPSILON) {
-                // A constant column carries no information; a unit deviation
-                // keeps it from being treated as infinitely significant.
                 deviation[d] = 1.0;
             }
         }
@@ -73,6 +62,8 @@ public final class AnomalyModel {
         for (int i = 0; i < count; i++) {
             distances[i] = KMeans.nearestDistance(standardized[i], result.centroids());
         }
+        double[] sortedDistances = distances.clone();
+        Arrays.sort(sortedDistances);
         double scale = percentile(distances, 0.95);
         if (scale < EPSILON) {
             double total = 0;
@@ -81,15 +72,18 @@ public final class AnomalyModel {
             }
             scale = Math.max(EPSILON, total / count);
         }
-        return new AnomalyModel(mean, deviation, result.centroids(), scale, count);
+        return new AnomalyModel(mean, deviation, result.centroids(), sortedDistances, scale, count);
     }
 
-    /** @return a value in [0, 1], where 1 means farther out than 95% of training */
     public double score(FlowFeatures features) {
-        if (features == null) {
+        if (features == null || sortedDistances.length == 0) {
             return 0.0;
         }
-        return Math.min(1.0, distance(features) / scale);
+        double distance = distance(features);
+        int below = lowerBound(sortedDistances, distance);
+        int equal = upperBound(sortedDistances, distance) - below;
+        double rank = (below + 0.5 * equal) / sortedDistances.length;
+        return Math.max(0.0, Math.min(1.0, rank));
     }
 
     public double distance(FlowFeatures features) {
@@ -122,5 +116,33 @@ public final class AnomalyModel {
         Arrays.sort(sorted);
         int index = (int) Math.ceil(fraction * sorted.length) - 1;
         return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
+    }
+
+    private static int lowerBound(double[] sorted, double target) {
+        int low = 0;
+        int high = sorted.length;
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            if (sorted[mid] < target) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return low;
+    }
+
+    private static int upperBound(double[] sorted, double target) {
+        int low = 0;
+        int high = sorted.length;
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            if (sorted[mid] <= target) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return low;
     }
 }
